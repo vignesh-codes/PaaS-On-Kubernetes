@@ -1,0 +1,380 @@
+
+# -------------------------------------------------------
+# 3. OpenTelemetry Collector Config
+# -------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: observability
+data:
+  config.yaml: |
+    receivers:
+      # Prometheus metrics (NodeExporter)
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: 'node-exporter'
+              static_configs:
+                - targets: ['node-exporter.observability.svc.cluster.local:9100']
+
+      # Kubernetes events
+      k8s_events:
+        auth_type: serviceAccount
+        namespaces: []  # empty = all namespaces
+
+      # Container logs from all pods
+      filelog:
+        include: [/var/log/containers/*.log]
+        start_at: end
+        include_file_path: true
+        include_file_name: false
+        operators:
+        # Only move existing log text to `body`
+        - type: move
+          from: attributes.log
+          to: body
+          action_on_missing: noop  # if the field doesn't exist, do nothing
+        - type: move
+          from: attributes.stream
+          to: attributes["log.stream"]
+          action_on_missing: noop
+        - type: move
+          from: attributes.time
+          to: attributes["log.timestamp"]
+          action_on_missing: noop
+
+    processors:
+      # Batch for performance
+      batch:
+
+      # Add K8s metadata to all logs
+      attributes:
+        actions:
+          - key: k8s.namespace.name
+            from_attribute: k8s.namespace.name
+            action: upsert
+          - key: k8s.pod.name
+            from_attribute: k8s.pod.name
+            action: upsert
+          - key: k8s.container.name
+            from_attribute: k8s.container.name
+            action: upsert
+
+    exporters:
+      # Export all data to your Python OTLP receiver
+      otlp:
+        endpoint: "otlp-to-postgres.observability.svc.cluster.local:4317"
+        tls:
+          insecure: true
+        timeout: 30s
+
+    service:
+      pipelines:
+        # Metrics pipeline
+        metrics:
+          receivers: [prometheus]
+          processors: [batch]
+          exporters: [otlp]
+
+        # Logs pipeline
+        logs:
+          receivers: [filelog, k8s_events]
+          processors: [batch, attributes]
+          exporters: [otlp]
+
+
+---
+# -------------------------------------------------------
+# 1. ServiceAccount for OpenTelemetry Collector
+# -------------------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector-sa
+  namespace: observability
+---
+# -------------------------------------------------------
+# 2. ClusterRole granting read access to cluster-wide resources
+# -------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: otel-collector-clusterrole
+rules:
+  - apiGroups: [""]
+    resources: ["events", "pods", "namespaces", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "deployments"]
+    verbs: ["get", "list", "watch"]
+---
+# -------------------------------------------------------
+# 3. ClusterRoleBinding linking ServiceAccount to ClusterRole
+# -------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: otel-collector-clusterrolebinding
+subjects:
+  - kind: ServiceAccount
+    name: otel-collector-sa
+    namespace: observability
+roleRef:
+  kind: ClusterRole
+  name: otel-collector-clusterrole
+  apiGroup: rbac.authorization.k8s.io
+---
+# -------------------------------------------------------
+# 4. OpenTelemetry Collector Deployment
+# -------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      serviceAccountName: otel-collector-sa
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.103.0
+          args: ["--config=/etc/otel/config.yaml"]
+          ports:
+            - containerPort: 4317 # OTLP gRPC
+            - containerPort: 8888 # Metrics/debug
+          volumeMounts:
+            - name: otel-config
+              mountPath: /etc/otel
+            - name: varlog-containers
+              mountPath: /var/log/containers
+              readOnly: true
+            - name: varlog-pods
+              mountPath: /var/log/pods
+              readOnly: true
+            - name: varlibdockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+          securityContext:
+            runAsUser: 0  # Needed for reading hostPath logs
+      volumes:
+        - name: otel-config
+          configMap:
+            name: otel-collector-config
+        - name: varlog-containers
+          hostPath:
+            path: /var/log/containers
+            type: DirectoryOrCreate
+        - name: varlog-pods
+          hostPath:
+            path: /var/log/pods
+            type: DirectoryOrCreate
+        - name: varlibdockercontainers
+          hostPath:
+            path: /var/lib/docker/containers
+            type: DirectoryOrCreate
+
+
+
+
+--- 
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otlp-to-postgres-script
+  namespace: observability
+data:
+  otlp_to_postgres.py: |
+    import grpc
+    from concurrent import futures
+    import psycopg2
+    import time
+    import json
+
+    # OTLP Protobuf imports
+    from opentelemetry.proto.collector.metrics.v1 import metrics_service_pb2_grpc, metrics_service_pb2
+    from opentelemetry.proto.collector.logs.v1 import logs_service_pb2_grpc, logs_service_pb2
+
+    # Connect to Postgres
+    conn = psycopg2.connect(
+        host="host.docker.internal",
+        port=5432,
+        dbname="paas_db",
+        user="paas_user",
+        password="paas_password"
+    )
+    cursor = conn.cursor()
+
+    # Create tables
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS metrics (
+        metric_name TEXT,
+        value DOUBLE PRECISION,
+        labels JSONB,
+        timestamp BIGINT
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS logs (
+        body TEXT,
+        severity TEXT,
+        attributes JSONB,
+        timestamp BIGINT
+    )
+    """)
+    conn.commit()
+
+
+    # -------------------- METRICS RECEIVER --------------------
+    class MetricsReceiver(metrics_service_pb2_grpc.MetricsServiceServicer):
+        def Export(self, request, context):
+            print(f"[DEBUG] Received metrics: {len(request.resource_metrics)}")
+            batch = []
+
+            for resource_metric in request.resource_metrics:
+                for scope_metric in resource_metric.scope_metrics:
+                    for metric in scope_metric.metrics:
+                        metric_name = metric.name
+
+                        # Gauge
+                        if metric.HasField("gauge"):
+                            for dp in metric.gauge.data_points:
+                                value = dp.as_double if dp.HasField("as_double") else dp.as_int
+                                labels = {kv.key: kv.value.string_value for kv in dp.attributes}
+                                ts = dp.time_unix_nano
+                                batch.append((metric_name, value, labels, ts))
+                                print(f"[DEBUG] Gauge: {metric_name}={value} labels={labels}")
+
+                        # Sum
+                        elif metric.HasField("sum"):
+                            for dp in metric.sum.data_points:
+                                value = dp.as_double if dp.HasField("as_double") else dp.as_int
+                                labels = {kv.key: kv.value.string_value for kv in dp.attributes}
+                                ts = dp.time_unix_nano
+                                batch.append((metric_name, value, labels, ts))
+                                print(f"[DEBUG] Sum: {metric_name}={value} labels={labels}")
+
+            if batch:
+                args_str = ','.join(
+                    cursor.mogrify(
+                        "(%s,%s,%s,%s)",
+                        (x[0], x[1], json.dumps(x[2]), x[3])
+                    ).decode("utf-8")
+                    for x in batch
+                )
+                cursor.execute(f"INSERT INTO metrics (metric_name, value, labels, timestamp) VALUES {args_str}")
+                conn.commit()
+                print(f"[DEBUG] Inserted {len(batch)} metrics into Postgres")
+
+            return metrics_service_pb2.ExportMetricsServiceResponse()
+
+
+    # -------------------- LOGS RECEIVER --------------------
+    class LogsReceiver(logs_service_pb2_grpc.LogsServiceServicer):
+        def Export(self, request, context):
+            print(f"[DEBUG] Received logs: {len(request.resource_logs)}")
+            batch = []
+
+            for resource_log in request.resource_logs:
+                for scope_log in resource_log.scope_logs:
+                    for log_record in scope_log.log_records:
+                        body = log_record.body.string_value if log_record.body.HasField("string_value") else str(log_record.body)
+                        severity = log_record.severity_text
+                        attrs = {kv.key: kv.value.string_value for kv in log_record.attributes}
+                        ts = log_record.time_unix_nano
+                        batch.append((body, severity, attrs, ts))
+                        print(f"[DEBUG] Log: {severity} - {body[:100]}...")
+
+            if batch:
+                args_str = ','.join(
+                    cursor.mogrify(
+                        "(%s,%s,%s,%s)",
+                        (x[0], x[1], json.dumps(x[2]), x[3])
+                    ).decode("utf-8")
+                    for x in batch
+                )
+                cursor.execute(f"INSERT INTO logs (body, severity, attributes, timestamp) VALUES {args_str}")
+                conn.commit()
+                print(f"[DEBUG] Inserted {len(batch)} logs/events into Postgres")
+
+            return logs_service_pb2.ExportLogsServiceResponse()
+
+
+    # -------------------- START gRPC SERVER --------------------
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=20))
+    metrics_service_pb2_grpc.add_MetricsServiceServicer_to_server(MetricsReceiver(), server)
+    logs_service_pb2_grpc.add_LogsServiceServicer_to_server(LogsReceiver(), server)
+
+    server.add_insecure_port('[::]:4317')
+    server.start()
+    print("✅ Listening for OTLP metrics and logs on 0.0.0.0:4317")
+
+    try:
+        while True:
+            time.sleep(60 * 60 * 24)
+    except KeyboardInterrupt:
+        server.stop(0)
+        conn.close()
+
+
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otlp-to-postgres
+  namespace: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otlp-to-postgres
+  template:
+    metadata:
+      labels:
+        app: otlp-to-postgres
+    spec:
+      containers:
+        - name: otlp-to-postgres
+          image: python:3.12-slim
+          command:
+          - sh
+          - -c
+          - |
+            pip install --no-cache-dir grpcio psycopg2-binary opentelemetry-proto && \
+            python -u /scripts/otlp_to_postgres.py
+          volumeMounts:
+            - name: script-volume
+              mountPath: /scripts
+          env:
+            - name: PGPASSWORD
+              value: "paas_password"
+      volumes:
+        - name: script-volume
+          configMap:
+            name: otlp-to-postgres-script
+            defaultMode: 0755
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otlp-to-postgres
+  namespace: observability
+spec:
+  selector:
+    app: otlp-to-postgres
+  ports:
+    - port: 4317
+      targetPort: 4317
+      protocol: TCP
+      name: otlp-grpc

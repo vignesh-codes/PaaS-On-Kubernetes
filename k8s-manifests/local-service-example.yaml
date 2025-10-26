@@ -1,0 +1,34 @@
+# Example of how to create a ClusterIP service for local development
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service-service
+  namespace: c2
+spec:
+  selector:
+    app: auth-service
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 5001
+  type: ClusterIP  # This works with local Kubernetes clusters
+---
+# Alternative: NodePort service for external access
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service-nodeport
+  namespace: c2
+spec:
+  selector:
+    app: auth-service
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 5001
+    nodePort: 30001  # Access via localhost:30001
+  type: NodePort
+
+
+
+

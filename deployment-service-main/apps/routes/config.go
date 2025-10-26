@@ -16,10 +16,8 @@ func NewConfig() *Config {
 
 func (c *Config) Cors() func(c *gin.Context) {
 	return func(c *gin.Context) {
-		origin_header := c.Request.Header["Origin"]
-		if len(origin_header) > 0 {
-			c.Header("Access-Control-Allow-Origin", origin_header[0])
-		}
+		// Always allow localhost:3000 for frontend
+		c.Header("Access-Control-Allow-Origin", "http://localhost:3000")
 		c.Header("Access-Control-Allow-Credentials", "true")
 		c.Header("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, accesstoken, Accept-language, Authorization, Content-Type, x-app-version,x-platform, x-client-id, x-client-secret, username")
 		c.Header("Access-Control-Allow-Methods", "GET,HEAD,PUT,POST,PATCH,DELETE,OPTIONS")

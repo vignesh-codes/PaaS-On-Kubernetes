@@ -1,6 +1,7 @@
 // src/pages/SignUp.tsx
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { API_ENDPOINTS, API_CONFIG } from "@/config/api";
 
 const SignUp: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -11,12 +12,13 @@ const SignUp: React.FC = () => {
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    const response = await fetch('http://localhost:8080/v2/auth/register', {
+    // Extract username from email (part before @)
+    const username = email.split('@')[0];
+    
+    const response = await fetch(API_ENDPOINTS.AUTH.REGISTER, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ email, password }),
+      headers: API_CONFIG.HEADERS,
+      body: JSON.stringify({ email, password, username }),
     });
 
     if (response.ok) {

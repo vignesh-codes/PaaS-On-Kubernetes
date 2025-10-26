@@ -22,6 +22,7 @@ import { useNavigate } from "react-router-dom";
 import DeployDialog from "./DeployDialog";
 import UpdateDialog from "./UpdateDialog";
 import Tooltip from "@mui/material/Tooltip";
+import { API_ENDPOINTS, API_CONFIG } from "@/config/api";
 
 interface ClusterInfo {
   kubernetes_version: string;
@@ -131,13 +132,12 @@ const Dashboard = () => {
       try {
         // Replace with your actual API endpoint
         const response = await fetch(
-          "http://104.198.50.89/v1/deployments/tenant/",
+          API_ENDPOINTS.DEPLOYMENTS.TENANT,
           {
             method: "GET",
             headers: {
               username: token || "",
-              "Content-Type": "application/json",
-              Origin: "http://localhost:5173",
+              ...API_CONFIG.HEADERS,
             },
           }
         );
@@ -162,12 +162,11 @@ const Dashboard = () => {
       try {
         // Replace with your actual API endpoint
         console.log(`token: ${token}`);
-        const response = await fetch("http://104.198.50.89/v1/build/scout/", {
+        const response = await fetch(API_ENDPOINTS.BUILD.SCOUT, {
           method: "GET",
           headers: {
             username: token || "",
-            "Content-Type": "application/json",
-            Origin: "http://localhost:5173",
+            ...API_CONFIG.HEADERS,
           },
         });
         if (!response.ok) {
@@ -212,13 +211,12 @@ const Dashboard = () => {
   const deleteDeployment = async (deploymentName: string) => {
     try {
       const response = await fetch(
-        `http://104.198.50.89/v1/deployments/${deploymentName}`,
+        API_ENDPOINTS.DEPLOYMENTS.BY_NAME(deploymentName),
         {
           method: "DELETE",
           headers: {
             username: token || "",
-            "Content-Type": "application/json",
-            Origin: "http://localhost:5173",
+            ...API_CONFIG.HEADERS,
           },
         }
       );
@@ -238,12 +236,11 @@ const Dashboard = () => {
   const handleDeploy = async (formData: any) => {
     console.log("form data ", formData, "token is ", token)
     try {
-      const response = await fetch("http://104.198.50.89/v1/deployments/", {
+      const response = await fetch(API_ENDPOINTS.DEPLOYMENTS.BASE, {
         method: "POST",
         headers: {
           username: token || "",
-          "Content-Type": "application/json",
-          Origin: "http://localhost:5173",
+          ...API_CONFIG.HEADERS,
         },
         body: JSON.stringify(formData),
       });
@@ -262,12 +259,11 @@ const Dashboard = () => {
 
   const handleScoutRepo = async (formData: any) => {
     try {
-      const response = await fetch("http://104.198.50.89/v1/build/scout/", {
+      const response = await fetch(API_ENDPOINTS.BUILD.SCOUT, {
         method: "POST",
         headers: {
           username: token || "",
-          "Content-Type": "application/json",
-          Origin: "http://localhost:5173",
+          ...API_CONFIG.HEADERS,
         },
         body: JSON.stringify(formData),
       });
@@ -286,12 +282,11 @@ const Dashboard = () => {
 
   const handleUpdateReplica = async (formData: any) => {
     try {
-      const response = await fetch("http://104.198.50.89/v1/deployments/", {
+      const response = await fetch(API_ENDPOINTS.DEPLOYMENTS.BASE, {
         method: "PUT",
         headers: {
           username: token || "",
-          "Content-Type": "application/json",
-          Origin: "http://localhost:5173",
+          ...API_CONFIG.HEADERS,
         },
         body: JSON.stringify(formData),
       });

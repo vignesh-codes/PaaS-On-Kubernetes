@@ -21,6 +21,11 @@ app.use(compression());
 app.use(cookieParser());
 app.use(bodyParser.json());
 
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
+});
+
 const server = http.createServer(app);
 
 server.listen(5000, () => {
@@ -30,6 +35,7 @@ server.listen(5000, () => {
 
 
 const { v1router, v2router } = routers();
+
 
 app.use("/v1", v1router);
 app.use("/v2", v2router);

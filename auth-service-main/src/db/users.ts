@@ -3,10 +3,10 @@ import { User } from '../models/user';
 
 export class UserDatabase {
     private static instance: UserDatabase;
-    private userModel: mongoose.Model<User & Document>;
+    private userModel: mongoose.Model<any>;
 
     private constructor() {
-        const userSchemaFields: Record<keyof User, any> = {
+        const userSchemaFields = {
             username: { type: String, required: true },
             email: { type: String, required: true },
             authentication: {
@@ -16,8 +16,8 @@ export class UserDatabase {
             },
         };
 
-        const userSchema: Schema<User & Document> = new Schema(userSchemaFields);
-        this.userModel = mongoose.models['User'] || mongoose.model<User & Document>('User', userSchema);
+        const userSchema = new Schema(userSchemaFields);
+        this.userModel = mongoose.models['User'] || mongoose.model('User', userSchema) as any;
     }
 
     public static getInstance(): UserDatabase {
@@ -48,7 +48,7 @@ export class UserDatabase {
     }
 
     public createUser(values: Record<string, any>) {
-        return new this.userModel(values).save().then((user) => user.toObject());
+        return new this.userModel(values).save().then((user: any) => user.toObject());
     }
 
     public deleteUserById(id: string) {

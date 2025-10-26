@@ -362,7 +362,7 @@ func (k *Kubernetes) CreateService(namespace, serviceName, deploymentName string
 					Protocol:   corev1.ProtocolTCP,
 				},
 			},
-			Type: corev1.ServiceTypeLoadBalancer,
+			Type: corev1.ServiceTypeClusterIP,
 		},
 	}
 

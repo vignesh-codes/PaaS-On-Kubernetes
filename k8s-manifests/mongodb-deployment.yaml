@@ -1,0 +1,167 @@
+# MongoDB Database Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb-deployment
+  namespace: core-services
+  labels:
+    app: mongodb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongodb
+  template:
+    metadata:
+      labels:
+        app: mongodb
+    spec:
+      containers:
+      - name: mongodb
+        image: mongo:7.0
+        ports:
+        - containerPort: 27017
+        env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          value: "admin"
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-secrets
+              key: MONGO_ROOT_PASSWORD
+        - name: MONGO_INITDB_DATABASE
+          value: "paas_db"
+        volumeMounts:
+        - name: mongodb-storage
+          mountPath: /data/db
+        - name: mongodb-config
+          mountPath: /etc/mongod.conf
+          subPath: mongod.conf
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        readinessProbe:
+          exec:
+            command:
+            - mongosh
+            - --eval
+            - "db.adminCommand('ping')"
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          exec:
+            command:
+            - mongosh
+            - --eval
+            - "db.adminCommand('ping')"
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+      volumes:
+      - name: mongodb-storage
+        persistentVolumeClaim:
+          claimName: mongodb-pvc
+      - name: mongodb-config
+        configMap:
+          name: mongodb-config
+---
+# MongoDB Persistent Volume Claim
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongodb-pvc
+  namespace: core-services
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+# MongoDB Configuration ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongodb-config
+  namespace: core-services
+data:
+  mongod.conf: |
+    storage:
+      dbPath: /data/db
+    systemLog:
+      destination: file
+      logAppend: true
+      path: /var/log/mongodb/mongod.log
+    net:
+      port: 27017
+      bindIp: 0.0.0.0
+    security:
+      authorization: enabled
+---
+# MongoDB Secrets
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mongodb-secrets
+  namespace: core-services
+type: Opaque
+stringData:
+  MONGO_ROOT_PASSWORD: "admin_password"
+  MONGO_USER: "paas_user"
+  MONGO_PASSWORD: "paas_password"
+  MONGO_DATABASE: "paas_db"
+---
+# MongoDB Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb-service
+  namespace: core-services
+spec:
+  selector:
+    app: mongodb
+  ports:
+  - protocol: TCP
+    port: 27017
+    targetPort: 27017
+  type: ClusterIP
+---
+# MongoDB User Initialization Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mongodb-init
+  namespace: core-services
+spec:
+  template:
+    spec:
+      containers:
+      - name: mongodb-init
+        image: mongo:7.0
+        command:
+        - /bin/bash
+        - -c
+        - |
+          mongosh --host mongodb-service:27017 -u admin -p admin_password --authenticationDatabase admin --eval "
+            db = db.getSiblingDB('paas_db');
+            db.createUser({
+              user: 'paas_user',
+              pwd: 'paas_password',
+              roles: [
+                { role: 'readWrite', db: 'paas_db' }
+              ]
+            });
+            print('User created successfully');
+          "
+        env:
+        - name: MONGO_INITDB_DATABASE
+          value: "paas_db"
+      restartPolicy: OnFailure
+  backoffLimit: 3

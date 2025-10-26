@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { ArrowLeft, Edit, Users } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import Tooltip from "@mui/material/Tooltip";
+import { API_ENDPOINTS, API_CONFIG } from "@/config/api";
 
 const TenantDeployments = () => {
   const router = useNavigate();
@@ -39,8 +40,11 @@ const TenantDeployments = () => {
       setError(null);
 
       try {
-        const response = await fetch("http://104.198.50.89/v1/deployments/", {
-          headers: { username: token || "default" },
+        const response = await fetch(API_ENDPOINTS.DEPLOYMENTS.BASE, {
+          headers: { 
+            username: token || "default",
+            ...API_CONFIG.HEADERS,
+          },
         });
         if (!response.ok) {
           throw new Error(`Error: ${response.statusText}`);
@@ -80,11 +84,11 @@ const TenantDeployments = () => {
   const deleteDeployment = async (deploymentName: string) => {
     try {
       const response = await fetch(
-        `http://104.198.50.89/v1/deployments/${deploymentName}`,
+        API_ENDPOINTS.DEPLOYMENTS.BY_NAME(deploymentName),
         {
           method: "DELETE",
           headers: {
-            "Content-Type": "application/json",
+            ...API_CONFIG.HEADERS,
             username: token || "default",
           },
         }
@@ -140,11 +144,10 @@ const TenantDeployments = () => {
     if (!selectedTenant) return;
     console.log(formData);
     try {
-      const response = await fetch("http://104.198.50.89/v1/deployments/", {
+      const response = await fetch(API_ENDPOINTS.DEPLOYMENTS.BASE, {
         method: "PUT",
         headers: {
-          "Content-Type": "application/json",
-          Origin: "http://localhost:5173",
+          ...API_CONFIG.HEADERS,
           username: token || "default",
         },
         body: JSON.stringify({

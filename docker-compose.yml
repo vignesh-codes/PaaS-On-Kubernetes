@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: paas-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: admin_password
+      MONGO_INITDB_DATABASE: paas_db
+    volumes:
+      - mongodb_data:/data/db
+      - ./mongodb-init:/docker-entrypoint-initdb.d
+    networks:
+      - paas-network
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: paas-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: paas_user
+      POSTGRES_PASSWORD: paas_password
+      POSTGRES_DB: paas_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - paas-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: paas-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - paas-network
+
+volumes:
+  mongodb_data:
+  postgres_data:
+  redis_data:
+
+networks:
+  paas-network:
+    driver: bridge
+
+
+
+
+

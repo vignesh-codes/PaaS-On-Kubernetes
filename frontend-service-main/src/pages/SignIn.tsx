@@ -1,6 +1,7 @@
 // src/pages/SignIn.tsx
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { API_ENDPOINTS, API_CONFIG } from "@/config/api";
 
 const SignIn: React.FC = () => {
   const [email, setEmail] = useState("");
@@ -14,11 +15,11 @@ const SignIn: React.FC = () => {
 
     // Example API call (replace with actual API)
     const response = await fetch(
-      "http://104.198.50.89/v1/deployments/tenant/",
+      API_ENDPOINTS.DEPLOYMENTS.TENANT,
       {
         method: "GET",
         headers: {
-          "Content-Type": "application/json",
+          ...API_CONFIG.HEADERS,
           username: email,
         },
       }

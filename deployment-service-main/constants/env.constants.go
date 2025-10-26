@@ -33,7 +33,9 @@ var (
 )
 
 var (
-	MONGODB_USER string = GetEnvString("MONGODB_USER", "user1")
-	MONGODB_PWD  string = GetEnvString("MONGODB_PWD", "xx")
-	MONGODB_NAME string = GetEnvString("MONGODB_NAME", "Cluster0")
+	MONGODB_USER string = GetEnvString("MONGODB_USER", "paas_user")
+	MONGODB_PWD  string = GetEnvString("MONGODB_PWD", "paas_password")
+	MONGODB_NAME string = GetEnvString("MONGODB_NAME", "paas_db")
+	MONGODB_HOST string = GetEnvString("MONGODB_HOST", "mongodb-service")
+	MONGODB_PORT string = GetEnvString("MONGODB_PORT", "27017")
 )

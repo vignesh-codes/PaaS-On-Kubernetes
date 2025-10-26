@@ -1,2 +1,2 @@
-export const JWT_SECRET = "jlasfndafgnogbnsrijgbrgujobn";
-export const MONGOURL = "mongodb+srv://user1:dbUser1PassWord@cluster0.oawjr.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+export const JWT_SECRET = process.env.JWT_SECRET || "jlasfndafgnogbnsrijgbrgujobn";
+export const MONGOURL = process.env.MONGOURL || "mongodb://paas_user:paas_password@mongodb-service.core-services.svc.cluster.local:27017/paas_db"

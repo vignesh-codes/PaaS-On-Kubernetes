@@ -50,10 +50,18 @@ func GetPSqlConnection() *gorm.DB {
 }
 
 func GetMongoConnection() *mongo.Client {
-	// Format MongoDB connection URI
+	// Format MongoDB connection URI using environment variables
+	mongoURI := fmt.Sprintf("mongodb://%s:%s@%s:%s/%s",
+		constants.MONGODB_USER,
+		constants.MONGODB_PWD,
+		constants.MONGODB_HOST,
+		constants.MONGODB_PORT,
+		constants.MONGODB_NAME)
+
+	fmt.Printf("Connecting to MongoDB: %s\n", mongoURI)
 
 	// Define client options
-	clientOptions := options.Client().ApplyURI("mongodb+srv://user1:dbUser1PassWord@cluster0.oawjr.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
+	clientOptions := options.Client().ApplyURI(mongoURI)
 
 	// Establish a connection
 	client, err := mongo.Connect(context.TODO(), clientOptions)

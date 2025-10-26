@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubelet-metrics
+  namespace: kube-system
+spec:
+  type: ClusterIP
+  ports:
+    - name: https-metrics
+      port: 10250
+      targetPort: 10250
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: kubelet-metrics
+  namespace: kube-system
+subsets:
+  - addresses:
+      - ip: 172.18.0.5   # <-- your node IP from kubectl get nodes
+    ports:
+      - port: 10250
+        name: https-metrics
+
+

@@ -1,11 +1,17 @@
 {
     "compilerOptions": {
-        "module": "NodeNext",
-        "moduleResolution": "NodeNext",
+        "target": "ES2020",
+        "module": "commonjs",
+        "moduleResolution": "node",
         "baseUrl": "src",
         "outDir": "dist",
         "sourceMap": true,
         "noImplicitAny": true,
+        "esModuleInterop": true,
+        "allowSyntheticDefaultImports": true,
+        "skipLibCheck": true,
+        "strict": false
     },
     "include": ["src/**/*"],
+    "exclude": ["node_modules", "dist"]
 }
