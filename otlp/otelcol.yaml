@@ -23,32 +23,11 @@ data:
         auth_type: serviceAccount
         namespaces: []  # empty = all namespaces
 
-      # Container logs from all pods
-      filelog:
-        include: [/var/log/containers/*.log]
-        start_at: end
-        include_file_path: true
-        include_file_name: false
-        operators:
-        # Only move existing log text to `body`
-        - type: move
-          from: attributes.log
-          to: body
-          action_on_missing: noop  # if the field doesn't exist, do nothing
-        - type: move
-          from: attributes.stream
-          to: attributes["log.stream"]
-          action_on_missing: noop
-        - type: move
-          from: attributes.time
-          to: attributes["log.timestamp"]
-          action_on_missing: noop
-
     processors:
       # Batch for performance
       batch:
 
-      # Add K8s metadata to all logs
+      # Add K8s metadata to events
       attributes:
         actions:
           - key: k8s.namespace.name
@@ -57,12 +36,9 @@ data:
           - key: k8s.pod.name
             from_attribute: k8s.pod.name
             action: upsert
-          - key: k8s.container.name
-            from_attribute: k8s.container.name
-            action: upsert
 
     exporters:
-      # Export all data to your Python OTLP receiver
+      # Export metrics and events to your Python OTLP receiver
       otlp:
         endpoint: "otlp-to-postgres.observability.svc.cluster.local:4317"
         tls:
@@ -77,12 +53,11 @@ data:
           processors: [batch]
           exporters: [otlp]
 
-        # Logs pipeline
+        # Events pipeline
         logs:
-          receivers: [filelog, k8s_events]
+          receivers: [k8s_events]
           processors: [batch, attributes]
           exporters: [otlp]
-
 
 ---
 # -------------------------------------------------------
