@@ -33,7 +33,7 @@ func (ctrl BuildController) CreateNewRepoScout(ctx *gin.Context) {
 		ctx.Abort()
 		return
 	}
-	request.Namespace = ctx.GetString("username")
+    request.Namespace = utils.SanitizeNamespace(ctx.GetString("username"))
 	request.RepoName, _ = utils.GetRepoNameFromURL(request.RepoURL)
 	request.Deployments = []string{}
 	request.CreatedAt = time.Now()
@@ -43,6 +43,6 @@ func (ctrl BuildController) CreateNewRepoScout(ctx *gin.Context) {
 
 func (ctrl BuildController) GetAllRepoScouts(ctx *gin.Context) {
 	fmt.Println("getting all scouts")
-	namespace := ctx.GetString("username")
+    namespace := utils.SanitizeNamespace(ctx.GetString("username"))
 	ctrl.v1BuildDao.GetAllRepoScouts(ctx, &model_build.RepoScout{Namespace: namespace})
 }

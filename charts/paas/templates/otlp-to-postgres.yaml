@@ -1,0 +1,193 @@
+{{- if .Values.otlpToPostgres.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otlp-to-postgres-script
+  namespace: {{ .Values.namespaces.otelGateway }}
+data:
+  otlp_to_postgres.py: |
+    import grpc
+    from concurrent import futures
+    import psycopg2
+    import time
+    import json
+
+    from opentelemetry.proto.collector.metrics.v1 import metrics_service_pb2_grpc, metrics_service_pb2
+    from opentelemetry.proto.collector.logs.v1 import logs_service_pb2_grpc, logs_service_pb2
+
+    def connect_db_with_retry():
+        while True:
+            try:
+                print("[BOOT] Connecting to Postgres ...")
+                conn = psycopg2.connect(
+                    host="{{ .Values.otlpToPostgres.postgres.host }}",
+                    port={{ .Values.otlpToPostgres.postgres.port }},
+                    dbname="{{ .Values.otlpToPostgres.postgres.db }}",
+                    user="{{ .Values.otlpToPostgres.postgres.user }}",
+                    password="{{ .Values.otlpToPostgres.postgres.password }}"
+                )
+                print("[BOOT] Connected to Postgres")
+                return conn
+            except Exception as e:
+                print(f"[BOOT] Postgres not ready: {e}. Retrying in 3s ...")
+                time.sleep(3)
+
+    conn = connect_db_with_retry()
+    cursor = conn.cursor()
+
+    def anyvalue_to_python(v):
+        if v is None:
+            return None
+        if hasattr(v, 'string_value') and v.HasField('string_value'):
+            return v.string_value
+        if hasattr(v, 'bool_value') and v.HasField('bool_value'):
+            return v.bool_value
+        if hasattr(v, 'int_value') and v.HasField('int_value'):
+            return v.int_value
+        if hasattr(v, 'double_value') and v.HasField('double_value'):
+            return v.double_value
+        return str(v)
+
+    def kvlist_to_dict(kvlist):
+        try:
+            return {kv.key: anyvalue_to_python(kv.value) for kv in kvlist}
+        except Exception:
+            return {}
+
+    class MetricsReceiver(metrics_service_pb2_grpc.MetricsServiceServicer):
+        def Export(self, request, context):
+            print(f"[DEBUG] Received metrics: {len(request.resource_metrics)}")
+            batch = []
+            for resource_metric in request.resource_metrics:
+                resource_attrs = kvlist_to_dict(resource_metric.resource.attributes)
+                k8s_ns = resource_attrs.get("k8s.namespace.name")
+                k8s_pod = resource_attrs.get("k8s.pod.name")
+                k8s_container = resource_attrs.get("k8s.container.name")
+                for scope_metric in resource_metric.scope_metrics:
+                    for metric in scope_metric.metrics:
+                        metric_name = metric.name
+                        if metric.HasField("gauge"):
+                            for dp in metric.gauge.data_points:
+                                value = dp.as_double if dp.HasField("as_double") else (dp.as_int if dp.HasField("as_int") else None)
+                                labels = {kv.key: anyvalue_to_python(kv.value) for kv in dp.attributes}
+                                ts = dp.time_unix_nano or int(time.time()*1e9)
+                                batch.append((metric_name, value, json.dumps(labels), json.dumps(resource_attrs), k8s_ns, k8s_pod, k8s_container, ts))
+                        elif metric.HasField("sum"):
+                            for dp in metric.sum.data_points:
+                                value = dp.as_double if dp.HasField("as_double") else (dp.as_int if dp.HasField("as_int") else None)
+                                labels = {kv.key: anyvalue_to_python(kv.value) for kv in dp.attributes}
+                                ts = dp.time_unix_nano or int(time.time()*1e9)
+                                batch.append((metric_name, value, json.dumps(labels), json.dumps(resource_attrs), k8s_ns, k8s_pod, k8s_container, ts))
+            if batch:
+                args_str = ','.join(
+                    cursor.mogrify(
+                        "(%s,%s,%s,%s,%s,%s,%s,to_timestamp(%s/1e9))",
+                        (x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7])
+                    ).decode("utf-8")
+                    for x in batch
+                )
+                cursor.execute(f"INSERT INTO metrics (metric_name, value, attributes, resource, namespace, pod, container, ts) VALUES {args_str}")
+                conn.commit()
+                print(f"[DEBUG] Inserted {len(batch)} metrics into Postgres")
+            return metrics_service_pb2.ExportMetricsServiceResponse()
+
+    class LogsReceiver(logs_service_pb2_grpc.LogsServiceServicer):
+        def Export(self, request, context):
+            print(f"[DEBUG] Received logs: {len(request.resource_logs)}")
+            batch = []
+            for resource_log in request.resource_logs:
+                resource_attrs = kvlist_to_dict(resource_log.resource.attributes)
+                k8s_ns = resource_attrs.get("k8s.namespace.name")
+                k8s_pod = resource_attrs.get("k8s.pod.name")
+                k8s_container = resource_attrs.get("k8s.container.name")
+                for scope_log in resource_log.scope_logs:
+                    for log_record in scope_log.log_records:
+                        body = log_record.body.string_value if log_record.body.HasField("string_value") else str(log_record.body)
+                        severity = log_record.severity_text
+                        attrs = {kv.key: anyvalue_to_python(kv.value) for kv in log_record.attributes}
+                        ts = log_record.time_unix_nano or int(time.time()*1e9)
+                        batch.append((body, severity, json.dumps(attrs), json.dumps(resource_attrs), k8s_ns, k8s_pod, k8s_container, ts))
+            if batch:
+                args_str = ','.join(
+                    cursor.mogrify(
+                        "(%s,%s,%s,%s,%s,%s,%s,to_timestamp(%s/1e9))",
+                        (x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7])
+                    ).decode("utf-8")
+                    for x in batch
+                )
+                cursor.execute(f"INSERT INTO logs (body, severity, attributes, resource, namespace, pod, container, ts) VALUES {args_str}")
+                conn.commit()
+                print(f"[DEBUG] Inserted {len(batch)} logs/events into Postgres")
+            return logs_service_pb2.ExportLogsServiceResponse()
+
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=20))
+    metrics_service_pb2_grpc.add_MetricsServiceServicer_to_server(MetricsReceiver(), server)
+    logs_service_pb2_grpc.add_LogsServiceServicer_to_server(LogsReceiver(), server)
+    server.add_insecure_port('[::]:4317')
+    server.start()
+    print("✅ Listening for OTLP metrics and logs on 0.0.0.0:4317")
+    try:
+        while True:
+            time.sleep(60)
+    except KeyboardInterrupt:
+        server.stop(0)
+        conn.close()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otlp-to-postgres
+  namespace: {{ .Values.namespaces.otelGateway }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otlp-to-postgres
+  template:
+    metadata:
+      labels:
+        app: otlp-to-postgres
+    spec:
+      containers:
+        - name: otlp-to-postgres
+          image: {{ .Values.otlpToPostgres.image }}
+          command:
+          - sh
+          - -c
+          - |
+            pip install --no-cache-dir grpcio psycopg2-binary opentelemetry-proto && \
+            python -u /scripts/otlp_to_postgres.py
+          volumeMounts:
+            - name: script-volume
+              mountPath: /scripts
+          env:
+            - name: PGPASSWORD
+              value: "{{ .Values.otlpToPostgres.postgres.password }}"
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+      volumes:
+        - name: script-volume
+          configMap:
+            name: otlp-to-postgres-script
+            defaultMode: 0755
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otlp-to-postgres
+  namespace: {{ .Values.namespaces.otelGateway }}
+spec:
+  selector:
+    app: otlp-to-postgres
+  ports:
+    - port: 4317
+      targetPort: 4317
+      protocol: TCP
+      name: otlp-grpc
+{{- end }}
+

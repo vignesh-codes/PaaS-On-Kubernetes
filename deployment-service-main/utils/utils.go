@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+    "regexp"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator"
@@ -117,4 +118,31 @@ func StructToMap(mystruct any) map[string]interface{} {
 		fmt.Println("KV Pair: ", field, val)
 	}
 	return inInterface
+}
+
+// SanitizeNamespace converts identifiers like emails to a valid k8s namespace name.
+// Rules: lowercase alphanumeric or '-', must start/end with alphanumeric, max 63 chars.
+func SanitizeNamespace(input string) string {
+    s := strings.ToLower(input)
+    // if email, take local-part before '@'
+    if at := strings.IndexByte(s, '@'); at > 0 {
+        s = s[:at]
+    }
+    // replace invalid chars with '-'
+    reInvalid := regexp.MustCompile("[^a-z0-9-]")
+    s = reInvalid.ReplaceAllString(s, "-")
+    // collapse multiple '-'
+    reDash := regexp.MustCompile("-+")
+    s = reDash.ReplaceAllString(s, "-")
+    // trim non-alnum at ends
+    reTrim := regexp.MustCompile("(^-+|-+$)")
+    s = reTrim.ReplaceAllString(s, "")
+    if len(s) == 0 {
+        s = "tenant"
+    }
+    if len(s) > 63 {
+        s = s[:63]
+        s = reTrim.ReplaceAllString(s, "")
+    }
+    return s
 }

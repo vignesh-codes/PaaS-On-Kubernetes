@@ -13,3 +13,19 @@ metadata:
   labels:
     name: core-services
     environment: development
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: otelagent
+  labels:
+    name: otelagent
+    environment: development
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: otel-gateway
+  labels:
+    name: otel-gateway
+    environment: development

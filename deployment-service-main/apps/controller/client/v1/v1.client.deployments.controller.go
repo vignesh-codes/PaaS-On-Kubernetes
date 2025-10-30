@@ -34,25 +34,25 @@ func NewDeploymentController(repository *adapter.Repository) IDeploymentControll
 
 func (ctrl DeploymentController) GetDeploymentsByNamespace(ctx *gin.Context) {
 	fmt.Println("getting deployments")
-	namespace := ctx.GetString("username")
+    namespace := utils.SanitizeNamespace(ctx.GetString("username"))
 	ctrl.v1DeploymentsDao.GetDeployments(ctx, namespace)
 }
 
 func (ctrl DeploymentController) GetTenantKubernetesInfo(ctx *gin.Context) {
 	fmt.Println("getting deployments")
-	namespace := ctx.GetString("username")
+    namespace := utils.SanitizeNamespace(ctx.GetString("username"))
 	ctrl.v1DeploymentsDao.GetTenantKubernetesInfo(ctx, namespace)
 }
 
 func (ctrl DeploymentController) GetDeploymentByName(ctx *gin.Context) {
 	fmt.Println("getting deployment by name")
-	namespace := ctx.GetString("username")
+    namespace := utils.SanitizeNamespace(ctx.GetString("username"))
 	ctrl.v1DeploymentsDao.GetDeploymentByName(ctx, namespace)
 }
 
 func (ctrl DeploymentController) CreateNamespace(ctx *gin.Context) {
 	fmt.Println("getting deployment by name")
-	namespace := ctx.GetString("username")
+    namespace := utils.SanitizeNamespace(ctx.GetString("username"))
 	ctrl.v1DeploymentsDao.CreateNamespace(ctx, namespace)
 }
 
@@ -69,7 +69,7 @@ func (ctrl DeploymentController) CreateDeployment(ctx *gin.Context) {
 		})
 		ctx.Abort()
 	}
-	request.Namespace = ctx.GetString("username")
+    request.Namespace = utils.SanitizeNamespace(ctx.GetString("username"))
 	request.CreatedAt = time.Now()
 	request.UpdatedAt = time.Now()
 	ctrl.v1DeploymentsDao.CreateDeployment(ctx, request)
@@ -77,11 +77,11 @@ func (ctrl DeploymentController) CreateDeployment(ctx *gin.Context) {
 
 func (ctrl DeploymentController) DeleteDeployment(ctx *gin.Context) {
 	fmt.Println("deleting deployment by name")
-	ctrl.v1DeploymentsDao.DeleteDeployment(ctx, ctx.GetString("username"), ctx.Param("deployment_name"))
+    ctrl.v1DeploymentsDao.DeleteDeployment(ctx, utils.SanitizeNamespace(ctx.GetString("username")), ctx.Param("deployment_name"))
 }
 
 func (ctrl DeploymentController) GetLatestEvents(ctx *gin.Context) {
-	ctrl.v1DeploymentsDao.GetLatestEvents(ctx, ctx.GetString("username"), 10)
+    ctrl.v1DeploymentsDao.GetLatestEvents(ctx, utils.SanitizeNamespace(ctx.GetString("username")), 10)
 }
 
 func (ctrl DeploymentController) UpdateDeploymentByName(ctx *gin.Context) {
@@ -112,5 +112,5 @@ func (ctrl DeploymentController) UpdateDeploymentByName(ctx *gin.Context) {
 		return
 	}
 	fmt.Println("ctrrl update deployment by name")
-	ctrl.v1DeploymentsDao.UpdateDeploymentByName(ctx, ctx.GetString("username"), request)
+    ctrl.v1DeploymentsDao.UpdateDeploymentByName(ctx, utils.SanitizeNamespace(ctx.GetString("username")), request)
 }

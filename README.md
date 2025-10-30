@@ -1,76 +1,131 @@
-# CS9549
+## PaaS on Kubernetes with AI Analysis on Infrastructure using OpenTelemetry
 
-Final state of our Platform-as-a-Service (PaaS) system built on Kubernetes. The PaaS enables users to manage namespaces, deploy applications, scale resources, and remove deployments using an intuitive interface and robust backend architecture. This system integrates Kubernetes features with custom services to provide automation, isolation, and scalability for user applications (service providers).
-Here the Service Discovery/Registry will be the kubernetes control plane. We created a custom user management microservice and deployment management microservice to provide apis for the UI side to enable customers(service providers) to deploy their applications, discover how many of their deployments are working, manage their deployments and get a endpoint from which they can interact with their custom applications that they deployed via our UI.
+## High Level Arch Diagram
+![image](https://github.com/vignesh-codes/PaaS-On-Kubernetes/blob/feat/v2/images/K8s-AI-Insights-HighLevel-Diagram.png)
 
-We are building something similar to qovery.com
+## Claude AI In Action
 
-## Overall System Architecture
-The entire application is deployed on kubernetes orchestration. Major components include:
-● User Management Service: Handles user authentication and data.
-● Deployment Management Service: Automates application deployment and scaling.
-● Customer Services: Interfaces with Kubernetes to manage namespaces and resources.
+### Published Reports:
 
-![architecture](images/overall-arch.png)
+Intrumentation score on metrics: https://claude.ai/public/artifacts/af7f5dcf-378e-41c5-a24b-d32c0945070e \
+Metrics and Logs Insights: https://claude.ai/public/artifacts/b49cdf3c-0da0-46c4-a6fb-d2f3cd78e767
 
-## Functional Requirements
-User Management Service:
-1. User Registration: Allows new users to sign up by providing username, email, and password.
-2. Authentication: Secure login/logout with JWT.
-3. User Account Management: Includes profile updates, password reset mechanisms, and account recovery.
-4. API for Integration: Endpoints for creating, updating, and retrieving user data.
+Screenshots: \
+![claude-logs-insights](https://github.com/vignesh-codes/PaaS-On-Kubernetes/blob/feat/v2/images/Logs-Insights.png)
 
+![claude-metrics-insights](https://github.com/vignesh-codes/PaaS-On-Kubernetes/blob/feat/v2/images/Metrics-Insights-image.png)
 
-## Deployment Management Service:
-1. Automated Deployment: Automated deployment to environments (staging/production).
-2. CI/CD and Version Control: Pulls latest changes from Git repositories and deploys automatically on single click from UI - Continuous deployment also possible without users intervention with just minor extra codes.
-3. Rollback Capability: Supports rolling back to previous application versions.
-4. Resource Provisioning: Allocates Kubernetes resources as required.
+## What this project does
 
-   
-## Customer Services:
-1. Namespace Isolation: Assigns unique namespaces to each customer.
-2. Application Deployment: Deploys applications via UI or API using container images.
-3. Resource Monitoring: Provides real-time CPU, memory, and storage usage statistics.
-4. Scaling Applications: Scales deployments based on customer requirements.
-5. Git Integration: Enables automated deployments triggered by repository commits.
+This repository implements a Platform-as-a-Service (PaaS) on Kubernetes with multi-tenant isolation and an OpenTelemetry-based observability pipeline. It enables users to:
 
-   
-## Quality Requirements
-1. Security: Implements RBAC, encryption, and namespace isolation.
-2. Usability: User-friendly UI for deploying, scaling, and managing applications.
-3. Reliability: Ensures high uptime with robust error handling.
-4. Scalability: Supports growing user and application demands.
-5. Auditability: Logs user actions and deployments for troubleshooting.
+- Create per-tenant Kubernetes namespaces (multi-tenancy via namespaces)
+- Deploy, list, scale, and delete app deployments within their own namespace
+- Access endpoints for their apps via standard Kubernetes Services
+- Stream logs and metrics into Postgres via an OTEL pipeline for AI-driven insights
 
-## Architecturally Significant Requirements (ASRs)
-1. Namespace Isolation: Ensures user-specific resource management and security.
-2. Scalability: Supports dynamic allocation of resources for customer applications.
-3. Rollback and CI/CD: Facilitates seamless version control and deployment pipelines.
+### Multi-tenancy model
+- Each user operates in a dedicated Kubernetes namespace derived from their identity (e.g., email local-part sanitized to a valid RFC1123 name).
+- All runtime resources (Deployments, Services) for a tenant are created in that tenant namespace.
 
-Detailed Requirements are defined here: 
-[CS 9549 Project Spreadsheet.xlsx](https://uwoca-my.sharepoint.com/:x:/g/personal/cezeagwu_uwo_ca/EUYlloT5zYJCuiRpmNhY8zcBCqgXU0hsw_8zYPbfAra9hA?e=YakXiA)
+## OpenTelemetry pipeline (end-to-end)
 
-## Walkthrough
+- otel-agent (DaemonSet, Helm):
+  - Collects container logs from `/var/log/containers` (filelog)
+  - Collects node/host metrics and kubelet metrics (hostmetrics, kubeletstats)
+  - Forwards logs and metrics via OTLP gRPC to the OTEL gateway
 
-Login Page
-![login](./images/login-page.png)
+- otel-gateway (Deployment, Helm):
+  - Receives OTLP (logs, metrics)
+  - Forwards to a custom OTLP receiver service
 
-Dashboard
-![dashboard](images/dashboard.png)
+- Custom OTLP receiver (Deployment in `otel-gateway`):
+  - Minimal Python gRPC server implementing OTLP logs/metrics ingest
+  - Writes enriched rows into Postgres tables `logs` and `metrics`, including resource attributes (namespace, pod, container) and timestamps
 
-Repo Scout
-![repo-scout](images/repo-scout.png)
+## AI insights (Claude Anthropic MCP server)
 
-Create Deployments
-![create-deployments](images/create-deployment.png)
+- An MCP (Model Context Protocol) server powered by Claude Anthropic is configured to query Postgres directly and generate insights about the platform state.
+- Typical use cases:
+  - Summarize error hot-spots and failing pods from `logs`
+  - Surface noisy components and frequent warnings by namespace/pod
+  - Provide short-term SLO/SLA style metrics by aggregating `metrics`
+- Output can be exported as structured text or dashboards and attached to reports (examples linked above).
 
-Deployments
-![deployments](images/deployments-page.png)
+## Build & Deploy (quick start)
 
-Deployment Details
-![deployment-details](images/deployments-details.png)
+1) Build images
+```bash
+docker build -t paas-platform/auth-service:latest -f auth-service-main/Dockerfile auth-service-main
+docker build -t paas-platform/deployment-service:latest -f deployment-service-main/dockerfile deployment-service-main
+docker build -t paas-platform/frontend-service:latest -f frontend-service-main/Dockerfile frontend-service-main
+```
 
-Update Replicas
-![update-replicas](images/update-replicas.png)
+2) Create namespaces
+```bash
+kubectl create ns core-services || true
+kubectl create ns paas-platform || true
+kubectl create ns otel-gateway || true
+kubectl create ns otelagent || true
+```
 
+3) Install OpenTelemetry (Helm)
+```bash
+helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
+helm repo update
+
+helm upgrade --install otel-agent open-telemetry/opentelemetry-collector \
+  --namespace otelagent --create-namespace \
+  --version 0.138.0 \
+  --set mode=daemonset \
+  --set image.repository=otel/opentelemetry-collector-contrib \
+  --set image.tag=0.103.0 \
+  --set command.name=otelcol-contrib \
+  --set command.extraArgs[0]=--set=service.telemetry.metrics.address=:8889 \
+  --set presets.logsCollection.enabled=true
+
+helm upgrade --install otel-gateway open-telemetry/opentelemetry-collector \
+  --namespace otel-gateway --create-namespace \
+  --version 0.138.0 \
+  --set mode=deployment \
+  --set image.repository=otel/opentelemetry-collector-contrib \
+  --set image.tag=0.103.0 \
+  --set command.name=otelcol-contrib \
+  --set command.extraArgs[0]=--set=service.telemetry.metrics.address=:8889 \
+  --set config.receivers.otlp.protocols.grpc.endpoint=0.0.0.0:4317 \
+  --set config.exporters.otlp.endpoint=otlp-to-postgres.otel-gateway.svc.cluster.local:4317 \
+  --set config.exporters.otlp.tls.insecure=true \
+  --set config.service.pipelines.logs.receivers[0]=otlp \
+  --set config.service.pipelines.logs.processors[0]=batch \
+  --set config.service.pipelines.logs.exporters[0]=otlp \
+  --set config.service.pipelines.metrics.receivers[0]=otlp \
+  --set config.service.pipelines.metrics.processors[0]=batch \
+  --set config.service.pipelines.metrics.exporters[0]=otlp
+```
+
+4) Databases (manifests)
+```bash
+kubectl apply -f k8s-manifests/postgres-deployment.yaml
+kubectl apply -f k8s-manifests/mongodb-deployment.yaml
+kubectl rollout status deploy/postgres-deployment -n core-services
+kubectl rollout status deploy/mongodb-deployment -n core-services
+```
+
+5) Install PaaS chart (apps + custom OTLP receiver)
+```bash
+helm upgrade --install paas ./charts/paas \
+  --namespace paas-platform -f charts/paas/values.yaml \
+  --set namespaces.create=false
+```
+
+6) Optional port-forwards
+```bash
+kubectl -n core-services port-forward svc/deployment-service 8080:80
+kubectl -n paas-platform port-forward svc/auth-service 5000:80
+kubectl -n paas-platform port-forward svc/frontend-service 3000:80
+```
+
+### Notes
+- Tenants are isolated by Kubernetes namespaces (sanitized from usernames/emails).
+- OTEL agent (DaemonSet) -> OTEL gateway (Deployment) -> Python OTLP receiver -> Postgres.
+- Claude Anthropic MCP reads from Postgres to generate infra insights (logs and metrics).

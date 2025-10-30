@@ -6,6 +6,8 @@ import (
 	"sort"
 	"time"
 
+    dutils "deployment-service/utils"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -220,6 +222,7 @@ func (k *Kubernetes) GetDeploymentByName(namespace, deploymentName string) (*Kub
 
 // Create namespace
 func (k *Kubernetes) CreateNamespaceIfNotExists(namespace string) error {
+    namespace = dutils.SanitizeNamespace(namespace)
 	// check if namespace is already created
 	_, err := k.connection.CoreV1().Namespaces().Get(context.TODO(), namespace, metav1.GetOptions{})
 	if err == nil {

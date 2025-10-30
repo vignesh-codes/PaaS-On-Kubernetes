@@ -1,0 +1,109 @@
+repositories:
+  - name: bitnami
+    url: https://charts.bitnami.com/bitnami
+  - name: open-telemetry
+    url: https://open-telemetry.github.io/opentelemetry-helm-charts
+
+releases:
+  # Postgres (core-services)
+  - name: postgres
+    namespace: core-services
+    chart: bitnami/postgresql
+    version: 15.5.27
+    values:
+      - auth:
+          username: paas_user
+          password: paas_password
+          database: paas_db
+        primary:
+          persistence:
+            enabled: false
+
+  # MongoDB (core-services)
+  - name: mongodb
+    namespace: core-services
+    chart: bitnami/mongodb
+    version: 15.6.7
+    values:
+      - auth:
+          enabled: true
+          rootUser: admin
+          rootPassword: admin_password
+          usernames:
+            - paas_user
+          passwords:
+            - paas_password
+          databases:
+            - paas_db
+        persistence:
+          enabled: false
+
+  # OpenTelemetry Agent (DaemonSet) in otelagent
+  - name: otel-agent
+    namespace: otelagent
+    chart: open-telemetry/opentelemetry-collector
+    version: 0.99.1
+    values:
+      - mode: daemonset
+        presets:
+          logsCollection:
+            enabled: true
+        config:
+          receivers:
+            filelog:
+              include: ["/var/log/containers/*.log"]
+              start_at: beginning
+            hostmetrics:
+              collection_interval: 30s
+              scrapers: { cpu: {}, load: {}, memory: {}, filesystem: {}, network: {} }
+            kubeletstats:
+              collection_interval: 30s
+              auth_type: serviceAccount
+              endpoint: https://${env:NODE_NAME}:10250
+              insecure_skip_verify: true
+          processors:
+            k8sattributes:
+              auth_type: serviceAccount
+              extract:
+                metadata: [k8s.namespace.name, k8s.pod.name, k8s.container.name]
+            batch: {}
+          exporters:
+            otlp:
+              endpoint: otel-collector-gateway.otel-gateway.svc.cluster.local:4317
+              tls: { insecure: true }
+          service:
+            pipelines:
+              logs: { receivers: [filelog], processors: [k8sattributes, batch], exporters: [otlp] }
+              metrics: { receivers: [hostmetrics, kubeletstats], processors: [batch], exporters: [otlp] }
+
+  # OpenTelemetry Gateway (Deployment) in otel-gateway
+  - name: otel-gateway
+    namespace: otel-gateway
+    chart: open-telemetry/opentelemetry-collector
+    version: 0.99.1
+    values:
+      - mode: deployment
+        replicaCount: 1
+        config:
+          receivers:
+            otlp:
+              protocols:
+                grpc: { endpoint: 0.0.0.0:4317 }
+          processors:
+            batch: {}
+          exporters:
+            otlp:
+              endpoint: otlp-to-postgres.otel-gateway.svc.cluster.local:4317
+              tls: { insecure: true }
+          service:
+            pipelines:
+              logs: { receivers: [otlp], processors: [batch], exporters: [otlp] }
+              metrics: { receivers: [otlp], processors: [batch], exporters: [otlp] }
+
+  # PaaS services and custom OTLP receiver
+  - name: paas
+    namespace: paas-platform
+    chart: ../charts/paas
+    values:
+      - values.yaml
+

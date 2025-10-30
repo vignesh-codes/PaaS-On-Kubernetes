@@ -1,0 +1,94 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deployment-service-sa
+  namespace: {{ .Values.namespaces.core }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: deployment-service-role
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "endpoints", "persistentvolumeclaims", "events", "configmaps", "secrets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "daemonsets", "replicasets", "statefulsets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["extensions", "networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: deployment-service-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: deployment-service-role
+subjects:
+- kind: ServiceAccount
+  name: deployment-service-sa
+  namespace: {{ .Values.namespaces.core }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deployment-service
+  namespace: {{ .Values.namespaces.core }}
+spec:
+  replicas: {{ .Values.deploymentService.replicas }}
+  selector:
+    matchLabels:
+      app: deployment-service
+  template:
+    metadata:
+      labels:
+        app: deployment-service
+    spec:
+      serviceAccountName: deployment-service-sa
+      containers:
+      - name: deployment-service
+        image: {{ .Values.deploymentService.image }}
+        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        ports:
+        - containerPort: 8080
+        envFrom:
+        - configMapRef:
+            name: deployment-service-config
+        - secretRef:
+            name: deployment-service-secrets
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: deployment-service
+  namespace: {{ .Values.namespaces.core }}
+spec:
+  selector:
+    app: deployment-service
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+
