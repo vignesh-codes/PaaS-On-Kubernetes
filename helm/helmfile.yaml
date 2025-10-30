@@ -42,9 +42,16 @@ releases:
   - name: otel-agent
     namespace: otelagent
     chart: open-telemetry/opentelemetry-collector
-    version: 0.99.1
+    version: 0.138.0
     values:
       - mode: daemonset
+        image:
+          repository: otel/opentelemetry-collector-contrib
+          tag: 0.103.0
+        command:
+          name: otelcol-contrib
+          extraArgs:
+            - --set=service.telemetry.metrics.address=:8889
         presets:
           logsCollection:
             enabled: true
@@ -56,11 +63,6 @@ releases:
             hostmetrics:
               collection_interval: 30s
               scrapers: { cpu: {}, load: {}, memory: {}, filesystem: {}, network: {} }
-            kubeletstats:
-              collection_interval: 30s
-              auth_type: serviceAccount
-              endpoint: https://${env:NODE_NAME}:10250
-              insecure_skip_verify: true
           processors:
             k8sattributes:
               auth_type: serviceAccount
@@ -69,21 +71,31 @@ releases:
             batch: {}
           exporters:
             otlp:
-              endpoint: otel-collector-gateway.otel-gateway.svc.cluster.local:4317
+              endpoint: otel-gateway-opentelemetry-collector.otel-gateway.svc.cluster.local:4317
               tls: { insecure: true }
           service:
+            telemetry:
+              logs:
+                level: debug
             pipelines:
               logs: { receivers: [filelog], processors: [k8sattributes, batch], exporters: [otlp] }
-              metrics: { receivers: [hostmetrics, kubeletstats], processors: [batch], exporters: [otlp] }
+              metrics: { receivers: [hostmetrics], processors: [batch], exporters: [otlp] }
 
   # OpenTelemetry Gateway (Deployment) in otel-gateway
   - name: otel-gateway
     namespace: otel-gateway
     chart: open-telemetry/opentelemetry-collector
-    version: 0.99.1
+    version: 0.138.0
     values:
       - mode: deployment
         replicaCount: 1
+        image:
+          repository: otel/opentelemetry-collector-contrib
+          tag: 0.103.0
+        command:
+          name: otelcol-contrib
+          extraArgs:
+            - --set=service.telemetry.metrics.address=:8889
         config:
           receivers:
             otlp:
@@ -96,6 +108,9 @@ releases:
               endpoint: otlp-to-postgres.otel-gateway.svc.cluster.local:4317
               tls: { insecure: true }
           service:
+            telemetry:
+              logs:
+                level: debug
             pipelines:
               logs: { receivers: [otlp], processors: [batch], exporters: [otlp] }
               metrics: { receivers: [otlp], processors: [batch], exporters: [otlp] }

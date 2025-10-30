@@ -1,6 +1,11 @@
 global:
   imagePullPolicy: IfNotPresent
 
+enableNamespaces: false
+enableAuthService: false
+enableDeploymentService: false
+enableFrontendService: false
+
 namespaces:
   create: true
   paas: paas-platform

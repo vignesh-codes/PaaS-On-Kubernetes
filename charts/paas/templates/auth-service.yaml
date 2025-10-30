@@ -1,3 +1,4 @@
+{{- if .Values.enableAuthService }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -56,4 +57,5 @@ spec:
   - port: 80
     targetPort: 5000
     protocol: TCP
+{{- end }}
 

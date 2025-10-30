@@ -1,0 +1,65 @@
+mode: daemonset
+image:
+  repository: otel/opentelemetry-collector-contrib
+  tag: 0.103.0
+command:
+  name: otelcol-contrib
+  extraArgs:
+    - --set=service.telemetry.metrics.address=:8889
+hostNetwork: true
+dnsPolicy: ClusterFirstWithHostNet
+podAnnotations: {}
+extraEnvs:
+  - name: NODE_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: spec.nodeName
+presets:
+  logsCollection:
+    enabled: true
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 50m
+    memory: 128Mi
+config:
+  receivers:
+    filelog:
+      include: ["/var/log/containers/*.log", "/var/log/pods/*/*/*.log"]
+      start_at: beginning
+    hostmetrics:
+      collection_interval: 30s
+      scrapers: { cpu: {}, load: {}, memory: {}, filesystem: {}, network: {} }
+    kubeletstats:
+      collection_interval: 10s
+      endpoint: https://${env:NODE_NAME}:10250
+      auth_type: serviceAccount
+      insecure_skip_verify: true
+      metric_groups: [pod, container]
+  processors:
+    k8sattributes:
+      auth_type: serviceAccount
+      passthrough: false
+      extract:
+        metadata: [k8s.namespace.name, k8s.pod.name, k8s.container.name]
+    batch: {}
+  exporters:
+    otlp:
+      endpoint: otel-gateway-opentelemetry-collector.otel-gateway.svc.cluster.local:4317
+      tls:
+        insecure: true
+  service:
+    telemetry:
+      logs:
+        level: debug
+    pipelines:
+      logs:
+        receivers: [filelog]
+        processors: [k8sattributes, batch]
+        exporters: [otlp]
+      metrics:
+        receivers: [hostmetrics, kubeletstats]
+        processors: [k8sattributes, batch]
+        exporters: [otlp]

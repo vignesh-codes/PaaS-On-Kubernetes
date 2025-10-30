@@ -1,3 +1,4 @@
+{{- if .Values.enableDeploymentService }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -91,4 +92,5 @@ spec:
   - port: 80
     targetPort: 8080
     protocol: TCP
+{{- end }}
 

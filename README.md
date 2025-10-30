@@ -75,32 +75,14 @@ helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm
 helm repo update
 
 helm upgrade --install otel-agent open-telemetry/opentelemetry-collector \
-  --namespace otelagent --create-namespace \
+  -n otelagent --create-namespace \
   --version 0.138.0 \
-  --set mode=daemonset \
-  --set image.repository=otel/opentelemetry-collector-contrib \
-  --set image.tag=0.103.0 \
-  --set command.name=otelcol-contrib \
-  --set command.extraArgs[0]=--set=service.telemetry.metrics.address=:8889 \
-  --set presets.logsCollection.enabled=true
+  -f helm/otel-agent-values.yaml
 
 helm upgrade --install otel-gateway open-telemetry/opentelemetry-collector \
-  --namespace otel-gateway --create-namespace \
+  -n otel-gateway --create-namespace \
   --version 0.138.0 \
-  --set mode=deployment \
-  --set image.repository=otel/opentelemetry-collector-contrib \
-  --set image.tag=0.103.0 \
-  --set command.name=otelcol-contrib \
-  --set command.extraArgs[0]=--set=service.telemetry.metrics.address=:8889 \
-  --set config.receivers.otlp.protocols.grpc.endpoint=0.0.0.0:4317 \
-  --set config.exporters.otlp.endpoint=otlp-to-postgres.otel-gateway.svc.cluster.local:4317 \
-  --set config.exporters.otlp.tls.insecure=true \
-  --set config.service.pipelines.logs.receivers[0]=otlp \
-  --set config.service.pipelines.logs.processors[0]=batch \
-  --set config.service.pipelines.logs.exporters[0]=otlp \
-  --set config.service.pipelines.metrics.receivers[0]=otlp \
-  --set config.service.pipelines.metrics.processors[0]=batch \
-  --set config.service.pipelines.metrics.exporters[0]=otlp
+  -f helm/otel-gateway-values.yaml
 ```
 
 4) Databases (manifests)
@@ -125,7 +107,75 @@ kubectl -n paas-platform port-forward svc/auth-service 5000:80
 kubectl -n paas-platform port-forward svc/frontend-service 3000:80
 ```
 
+7) Sanity test: generate logs and verify inserts
+```bash
+# Create a simple log generator
+cat <<'EOF' | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: log-generator
+  namespace: core-services
+  labels:
+    app: log-generator
+spec:
+  restartPolicy: Always
+  containers:
+    - name: logger
+      image: busybox:1.36
+      command: ["/bin/sh","-c"]
+      args:
+        - |
+          i=0; while true; do echo "$(date -u +%FT%TZ) log-generator tick $i"; i=$((i+1)); sleep 2; done
+      resources:
+        requests: { cpu: 10m, memory: 16Mi }
+        limits:   { cpu: 50m,  memory: 32Mi }
+EOF
+
+kubectl wait --for=condition=Ready pod/log-generator -n core-services --timeout=90s
+
+# Receiver should print inserts
+kubectl logs -n otel-gateway deploy/otlp-to-postgres --tail=100 | egrep 'Received logs|Inserted .* logs|Received metrics|Inserted .* metrics'
+
+# Check Postgres
+psql -U paas_user -d paas_db -h postgres-service.core-services.svc.cluster.local -c "SELECT count(*) FROM logs;"
+psql -U paas_user -d paas_db -h postgres-service.core-services.svc.cluster.local -c "SELECT ts, namespace, pod, left(body,120) FROM logs ORDER BY ts DESC LIMIT 10;"
+```
+
 ### Notes
 - Tenants are isolated by Kubernetes namespaces (sanitized from usernames/emails).
 - OTEL agent (DaemonSet) -> OTEL gateway (Deployment) -> Python OTLP receiver -> Postgres.
 - Claude Anthropic MCP reads from Postgres to generate infra insights (logs and metrics).
+
+## Deploy only the OTLP-to-Postgres component
+
+If you want to render just the custom OTLP receiver (and nothing else from the chart):
+
+1) Ensure values enable only the OTLP receiver
+   - `charts/paas/values.yaml` already disables other templates and sets:
+     - `enableNamespaces: false`
+     - `enableAuthService: false`
+     - `enableDeploymentService: false`
+     - `enableFrontendService: false`
+     - `otlpToPostgres.enabled: true`
+
+2) Install/upgrade only OTLP-to-Postgres
+```bash
+helm upgrade --install paas ./charts/paas \
+  -n paas-platform -f charts/paas/values.yaml \
+  --set namespaces.create=false
+
+# Verify it lands in the otel-gateway namespace
+kubectl get deploy,svc -n otel-gateway | grep otlp-to-postgres
+```
+
+3) Uninstall
+```bash
+helm uninstall paas -n paas-platform --wait
+```
+
+Uninstall OTEL components
+```bash
+helm uninstall otel-agent -n otelagent --wait || true
+helm uninstall otel-gateway -n otel-gateway --wait || true
+```

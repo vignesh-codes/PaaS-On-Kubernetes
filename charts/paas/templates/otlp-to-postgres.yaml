@@ -35,6 +35,37 @@ data:
     conn = connect_db_with_retry()
     cursor = conn.cursor()
 
+    # Ensure schema exists
+    try:
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS metrics (
+          metric_name text,
+          value double precision,
+          attributes jsonb,
+          resource jsonb,
+          namespace text,
+          pod text,
+          container text,
+          ts timestamptz
+        );
+        """)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS logs (
+          body text,
+          severity text,
+          attributes jsonb,
+          resource jsonb,
+          namespace text,
+          pod text,
+          container text,
+          ts timestamptz
+        );
+        """)
+        conn.commit()
+        print("[BOOT] Ensured Postgres tables 'metrics' and 'logs' exist")
+    except Exception as e:
+        print(f"[BOOT] Failed ensuring tables: {e}")
+
     def anyvalue_to_python(v):
         if v is None:
             return None
@@ -53,6 +84,46 @@ data:
             return {kv.key: anyvalue_to_python(kv.value) for kv in kvlist}
         except Exception:
             return {}
+
+    def normalize_severity(s: str | None) -> str | None:
+        if not s:
+            return None
+        s_up = str(s).strip().upper()
+        # Map common variants
+        aliases = {
+            "ERR": "ERROR", "ERROR": "ERROR", "SEVERE": "ERROR", "FATAL": "ERROR",
+            "WARN": "WARN", "WARNING": "WARN",
+            "INFO": "INFO", "INFORMATION": "INFO",
+            "DEBUG": "DEBUG", "TRACE": "DEBUG",
+        }
+        return aliases.get(s_up, s_up)
+
+    def infer_severity(current: str | None, attrs: dict, body: str) -> str:
+        # 1) Prefer provided severity
+        sev = normalize_severity(current)
+        if sev:
+            return sev
+        # 2) Check common attribute keys
+        for key in [
+            "severity", "level", "log.level", "logger.level", "logging.level",
+            "severity_text", "k8s.log.severity", "otel.log.severity"
+        ]:
+            if key in attrs:
+                sev_attr = normalize_severity(attrs.get(key))
+                if sev_attr:
+                    return sev_attr
+        # 3) Heuristic from body text
+        body_up = (body or "").upper()
+        if any(w in body_up for w in [" EXCEPTION", " TRACEBACK", " PANIC", " FATAL", " CRITICAL", " ERROR:", " ERR ", " FAILED", " FAILURE", " CRASH"]):
+            return "ERROR"
+        if any(w in body_up for w in [" WARN", " WARNING"]):
+            return "WARN"
+        if any(w in body_up for w in [" INFO", " STARTING", " STARTED", " READY "]):
+            return "INFO"
+        if any(w in body_up for w in [" DEBUG", " TRACE "]):
+            return "DEBUG"
+        # Default
+        return "INFO"
 
     class MetricsReceiver(metrics_service_pb2_grpc.MetricsServiceServicer):
         def Export(self, request, context):
@@ -103,8 +174,8 @@ data:
                 for scope_log in resource_log.scope_logs:
                     for log_record in scope_log.log_records:
                         body = log_record.body.string_value if log_record.body.HasField("string_value") else str(log_record.body)
-                        severity = log_record.severity_text
                         attrs = {kv.key: anyvalue_to_python(kv.value) for kv in log_record.attributes}
+                        severity = infer_severity(getattr(log_record, "severity_text", None), attrs, body)
                         ts = log_record.time_unix_nano or int(time.time()*1e9)
                         batch.append((body, severity, json.dumps(attrs), json.dumps(resource_attrs), k8s_ns, k8s_pod, k8s_container, ts))
             if batch:

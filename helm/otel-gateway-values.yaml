@@ -1,0 +1,36 @@
+mode: deployment
+replicaCount: 1
+image:
+  repository: otel/opentelemetry-collector-contrib
+  tag: 0.103.0
+command:
+  name: otelcol-contrib
+  extraArgs:
+    - --set=service.telemetry.metrics.address=:8889
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 50m
+    memory: 128Mi
+config:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+  processors:
+    batch: {}
+  exporters:
+    otlp:
+      endpoint: otlp-to-postgres.otel-gateway.svc.cluster.local:4317
+      tls:
+        insecure: true
+  service:
+    telemetry:
+      logs:
+        level: debug
+    pipelines:
+      logs: { receivers: [otlp], processors: [batch], exporters: [otlp] }
+      metrics: { receivers: [otlp], processors: [batch], exporters: [otlp] }
