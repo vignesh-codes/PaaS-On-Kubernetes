@@ -7,8 +7,8 @@
 
 ### Published Reports:
 
-Intrumentation score on metrics: https://claude.ai/public/artifacts/af7f5dcf-378e-41c5-a24b-d32c0945070e \
-Metrics and Logs Insights: https://claude.ai/public/artifacts/b49cdf3c-0da0-46c4-a6fb-d2f3cd78e767
+Metrics Insights: https://claude.ai/public/artifacts/03086237-54fc-4a3e-abfa-fb56f399fdfc \
+Logs Insights: https://claude.ai/public/artifacts/236f2d4a-3e72-4cda-8eb9-0e7033d01ed2
 
 Screenshots: \
 ![claude-logs-insights](https://github.com/vignesh-codes/PaaS-On-Kubernetes/blob/feat/v2/images/Logs-Insights.png)
