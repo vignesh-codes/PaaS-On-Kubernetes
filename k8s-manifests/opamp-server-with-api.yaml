@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opamp-server-with-api
+  namespace: otel-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opamp-server-with-api
+  template:
+    metadata:
+      labels:
+        app: opamp-server-with-api
+    spec:
+      containers:
+        - name: opamp-server
+          image: golang:1.23-alpine
+          command: 
+            - sh
+            - -c
+            - |
+              apk add --no-cache git
+              cd /tmp && \
+              git clone https://github.com/open-telemetry/opamp-go.git && \
+              cd opamp-go && \
+              cd internal/examples/server && \
+              go run main_with_api.go
+          env:
+            - name: API_PORT
+              value: "8080"
+            - name: OPAMP_LISTEN_ENDPOINT
+              value: "0.0.0.0:4320"
+          ports:
+            - containerPort: 4320
+              name: opamp-ws
+            - containerPort: 8080
+              name: api
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opamp-server-with-api
+  namespace: otel-gateway
+spec:
+  selector:
+    app: opamp-server-with-api
+  ports:
+    - port: 4320
+      targetPort: 4320
+      protocol: TCP
+      name: opamp-ws
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+      name: api
+  type: ClusterIP
+
+

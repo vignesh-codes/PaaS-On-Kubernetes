@@ -1,11 +1,9 @@
 mode: daemonset
 image:
   repository: otel/opentelemetry-collector-contrib
-  tag: 0.103.0
+  tag: 0.139.0
 command:
   name: otelcol-contrib
-  extraArgs:
-    - --set=service.telemetry.metrics.address=:8889
 hostNetwork: true
 dnsPolicy: ClusterFirstWithHostNet
 podAnnotations: {}
@@ -14,9 +12,15 @@ extraEnvs:
     valueFrom:
       fieldRef:
         fieldPath: spec.nodeName
+  - name: K8S_POD_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.name
+
 presets:
   logsCollection:
     enabled: true
+
 resources:
   limits:
     cpu: 200m
@@ -24,42 +28,182 @@ resources:
   requests:
     cpu: 50m
     memory: 128Mi
+
+service:
+  annotations: {}
+
 config:
+  extensions:
+    health_check:
+      endpoint: 0.0.0.0:13133
+      path: /
+    opamp:
+      server:
+        ws:
+          # Connecting to OpAMP server running locally on host machine
+          # host.docker.internal allows Kubernetes pods to reach the host machine
+          # For non-TLS: use "ws://host.docker.internal:4320/v1/opamp"
+          # For TLS: use "wss://host.docker.internal:4320/v1/opamp"
+          endpoint: "wss://host.docker.internal:4320/v1/opamp"
+          # Uncomment below if your local OpAMP server uses TLS (wss://)
+          tls:
+            insecure_skip_verify: true
+      capabilities:
+        # Note: accepts_remote_config is automatically enabled by the OpAMP extension
+        # These are the only valid capability flags for the OpAMP extension:
+        reports_effective_config: true
+        reports_health: true
+        reports_available_components: true
+    pprof:
+      endpoint: 0.0.0.0:1777
+
   receivers:
+    prometheus:
+      config:
+        scrape_configs:
+          - job_name: "otelcol"
+            static_configs:
+              - targets: ["0.0.0.0:8889"]
+
+    otlp:
+      protocols:
+        http:
+          endpoint: 0.0.0.0:4318
+
     filelog:
       include: ["/var/log/containers/*.log", "/var/log/pods/*/*/*.log"]
       start_at: beginning
+
     hostmetrics:
       collection_interval: 30s
       scrapers: { cpu: {}, load: {}, memory: {}, filesystem: {}, network: {} }
+
     kubeletstats:
       collection_interval: 10s
       endpoint: https://${env:NODE_NAME}:10250
       auth_type: serviceAccount
       insecure_skip_verify: true
       metric_groups: [pod, container]
+
   processors:
     k8sattributes:
       auth_type: serviceAccount
       passthrough: false
       extract:
-        metadata: [k8s.namespace.name, k8s.pod.name, k8s.container.name]
+        metadata:
+          - k8s.namespace.name
+          - k8s.pod.name
+          - k8s.container.name
+        labels:
+          - key_regex: .*
+        annotations:
+          - key_regex: .*
+
+    resource:
+      attributes:
+        - key: environment
+          value: dev
+          action: upsert
+        - key: cluster
+          value: local-k8s
+          action: upsert
+        # Noise attributes for payload size testing
+        - key: noise.attr1
+          value: "xk3h82ls9p0q"
+          action: upsert
+        - key: noise.attr2
+          value: "3984jf9sd93jfw9sd2j3f9jsdf"
+          action: upsert
+        - key: noise.attr3
+          value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          action: upsert
+        - key: noise.attr4
+          value: "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+          action: upsert
+        - key: noise.attr5
+          value: "some_random_extra_high_entropy_attribute_payload_chunk_to_bloat_size"
+          action: upsert
+        - key: noise.attr6
+          value: "⚡🔥💥 unicode too just for fun 💥🔥⚡"
+          action: upsert
+
+    # Filter processor to drop metrics based on conditions
+    # Items matching these conditions will be dropped from the pipeline
+    filter/metrics:
+      metrics:
+        metric:
+          # Drop metrics from specific namespaces (test: drop kube-system metrics)
+          - 'resource.attributes["k8s.namespace.name"] == "kube-system"'
+          # Drop specific metric names (example: drop high-cardinality metrics)
+          - 'name == "container.cpu.time"'
+          # Drop metrics from pods matching pattern (example: drop test pods)
+          - 'IsMatch(resource.attributes["k8s.pod.name"], ".*test.*")'
+          # Drop metrics from specific containers (example: drop sidecar containers)
+          - 'resource.attributes["k8s.container.name"] == "istio-proxy"'
+        datapoint:
+          # Drop datapoints with specific attribute values
+          # Example: drop metrics where method is GET
+          # - 'attributes["http.method"] == "GET"'
+
+    # Filter processor to drop logs based on conditions
+    # Items matching these conditions will be dropped from the pipeline
+    filter/logs:
+      logs:
+        log_record:
+          # Drop logs from specific namespaces (test: drop kube-system logs)
+          - 'resource.attributes["k8s.namespace.name"] == "kube-system"'
+          # Drop logs from pods matching pattern (example: drop test pods)
+          - 'IsMatch(resource.attributes["k8s.pod.name"], ".*test.*")'
+          # Drop logs with specific severity (example: drop DEBUG logs)
+          - 'severity_text == "DEBUG"'
+          # Drop logs containing specific text in body (uncomment and adjust pattern as needed)
+          # Note: Body matching may require body to be converted to string depending on OTTL version
+          # - 'IsMatch(body, ".*health.*check.*")'
+          # Drop logs from specific containers (example: drop sidecar containers)
+          - 'resource.attributes["k8s.container.name"] == "istio-proxy"'
+          # Drop logs with specific attributes (example: drop logs with drop=true attribute)
+          - 'attributes["drop"] == true'
+
     batch: {}
+
   exporters:
     otlp:
       endpoint: otel-gateway-opentelemetry-collector.otel-gateway.svc.cluster.local:4317
       tls:
         insecure: true
+
+
   service:
+    
+    extensions: [health_check, opamp, pprof]
     telemetry:
+      resource:
+        service.name: ${env:K8S_POD_NAME}
       logs:
         level: debug
+      metrics:
+        level: detailed
+        readers:
+          - pull:
+              exporter:
+                prometheus:
+                  host: "0.0.0.0"
+                  port: 8888
+
     pipelines:
+      # Logs pipeline - ONLY processes logs from filelog receiver
       logs:
         receivers: [filelog]
-        processors: [k8sattributes, batch]
+        processors: [k8sattributes, resource, filter/logs, batch]
         exporters: [otlp]
+
+      # Metrics pipeline - ONLY processes metrics from hostmetrics and kubeletstats receivers
       metrics:
         receivers: [hostmetrics, kubeletstats]
-        processors: [k8sattributes, batch]
+        processors: [k8sattributes, resource, filter/metrics, batch]
         exporters: [otlp]
+
+# to deploy
+helm delete otel-agent open-telemetry/opentelemetry-collector \
+  -f otel-agent-values.yaml \
+  -n otelagent

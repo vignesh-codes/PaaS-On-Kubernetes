@@ -1,0 +1,239 @@
+{{- if .Values.otlpToPostgres.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-metrics-scraper-script
+  namespace: {{ .Values.namespaces.otelGateway }}
+data:
+  scrape_metrics.py: |
+    import requests
+    import psycopg2
+    import time
+    import json
+    from datetime import datetime
+
+    # Configuration
+    # Note: Agent uses hostNetwork, so we'll try service first, but may need pod IPs
+    # Gateway should be accessible via service
+    AGENT_METRICS_URLS = [
+        "http://otel-agent-opentelemetry-collector.otelagent.svc.cluster.local:8888/metrics",
+        "http://otel-agent-opentelemetry-collector.otelagent.svc.cluster.local:8889/metrics"
+    ]
+    GATEWAY_METRICS_URLS = [
+        "http://otel-gateway-opentelemetry-collector.otel-gateway.svc.cluster.local:8888/metrics",
+        "http://otel-gateway-opentelemetry-collector.otel-gateway.svc.cluster.local:8889/metrics"
+    ]
+    SCRAPE_INTERVAL = 60  # seconds
+
+    def connect_db_with_retry():
+        while True:
+            try:
+                print("[BOOT] Connecting to Postgres ...")
+                conn = psycopg2.connect(
+                    host="{{ .Values.otlpToPostgres.postgres.host }}",
+                    port={{ .Values.otlpToPostgres.postgres.port }},
+                    dbname="{{ .Values.otlpToPostgres.postgres.db }}",
+                    user="{{ .Values.otlpToPostgres.postgres.user }}",
+                    password="{{ .Values.otlpToPostgres.postgres.password }}"
+                )
+                print("[BOOT] Connected to Postgres")
+                return conn
+            except Exception as e:
+                print(f"[BOOT] Postgres not ready: {e}. Retrying in 3s ...")
+                time.sleep(3)
+
+    def parse_prometheus_metrics(text):
+        """Parse Prometheus metrics format and return a dict with metric name patterns"""
+        metrics = {}
+        for line in text.split('\n'):
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if ' ' not in line:
+                continue
+            parts = line.rsplit(' ', 1)
+            if len(parts) != 2:
+                continue
+            metric_line, value = parts
+            try:
+                val = float(value)
+                # Store both full line and base metric name
+                metrics[metric_line] = val
+                # Extract base metric name (before {)
+                base_name = metric_line.split('{')[0]
+                if base_name not in metrics:
+                    metrics[base_name] = 0
+                metrics[base_name] += val
+            except ValueError:
+                continue
+        return metrics
+
+    def find_metric_value(metrics, base_name, filters=None):
+        """Find metric value matching base name and optional label filters"""
+        if filters is None:
+            filters = {}
+        total = 0
+        for metric_line, value in metrics.items():
+            if not metric_line.startswith(base_name):
+                continue
+            # Check if all filters match
+            match = True
+            for key, val in filters.items():
+                if f'{key}="{val}"' not in metric_line and f'{key}={val}' not in metric_line:
+                    match = False
+                    break
+            if match:
+                total += value
+        return total
+
+    def try_scrape_metrics(urls):
+        """Try to scrape metrics from a list of URLs, return metrics dict and success status"""
+        for url in urls:
+            try:
+                response = requests.get(url, timeout=5)
+                response.raise_for_status()
+                return parse_prometheus_metrics(response.text), True
+            except Exception as e:
+                continue
+        return {}, False
+
+    def scrape_and_store_metrics(conn, urls, collector_name):
+        try:
+            metrics, success = try_scrape_metrics(urls)
+            if not success:
+                print(f"[{collector_name}] ⚠️ Could not scrape metrics from any URL")
+                return False
+            cursor = conn.cursor()
+            
+            # Track filter statistics - look for metrics with filter label
+            filter_metrics_dropped = find_metric_value(metrics, 'otelcol_processor_filter_datapoints_filtered_total', {'filter': 'filter/metrics'})
+            filter_logs_dropped = find_metric_value(metrics, 'otelcol_processor_filter_logs_filtered_total', {'filter': 'filter/logs'})
+            
+            # Track receiver statistics
+            logs_received = find_metric_value(metrics, 'otelcol_receiver_accepted_log_records_total', {'receiver': 'filelog'})
+            metrics_received_host = find_metric_value(metrics, 'otelcol_receiver_accepted_metric_points_total', {'receiver': 'hostmetrics'})
+            metrics_received_kubelet = find_metric_value(metrics, 'otelcol_receiver_accepted_metric_points_total', {'receiver': 'kubeletstats'})
+            metrics_received_total = metrics_received_host + metrics_received_kubelet
+            
+            # Track exporter statistics
+            logs_exported = find_metric_value(metrics, 'otelcol_exporter_sent_log_records_total', {'exporter': 'otlp'})
+            metrics_exported = find_metric_value(metrics, 'otelcol_exporter_sent_metric_points_total', {'exporter': 'otlp'})
+            
+            # Track processor incoming items
+            processor_logs_in = find_metric_value(metrics, 'otelcol_processor_incoming_items_total', {'otel_signal': 'logs', 'processor': 'filter/logs'})
+            processor_metrics_in = find_metric_value(metrics, 'otelcol_processor_incoming_items_total', {'otel_signal': 'metrics', 'processor': 'filter/metrics'})
+            
+            # Store logs pipeline insights
+            if logs_received > 0 or logs_exported > 0 or filter_logs_dropped > 0:
+                cursor.execute("""
+                    INSERT INTO pipeline_insights (pipeline_type, stage, signal_type, count, dropped_count, stage_details)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (
+                    "logs_pipeline",
+                    f"filter_stats_{collector_name}",
+                    "logs",
+                    processor_logs_in if processor_logs_in > 0 else logs_received,
+                    filter_logs_dropped,
+                    json.dumps({
+                        "collector": collector_name,
+                        "receiver_accepted": logs_received,
+                        "processor_incoming": processor_logs_in,
+                        "filter_dropped": filter_logs_dropped,
+                        "exporter_sent": logs_exported,
+                        "retention_rate": ((logs_received - filter_logs_dropped) / logs_received * 100) if logs_received > 0 else 0
+                    })
+                ))
+            
+            # Store metrics pipeline insights
+            if metrics_received_total > 0 or metrics_exported > 0 or filter_metrics_dropped > 0:
+                cursor.execute("""
+                    INSERT INTO pipeline_insights (pipeline_type, stage, signal_type, count, dropped_count, stage_details)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (
+                    "metrics_pipeline",
+                    f"filter_stats_{collector_name}",
+                    "metrics",
+                    processor_metrics_in if processor_metrics_in > 0 else metrics_received_total,
+                    filter_metrics_dropped,
+                    json.dumps({
+                        "collector": collector_name,
+                        "receiver_accepted_hostmetrics": metrics_received_host,
+                        "receiver_accepted_kubeletstats": metrics_received_kubelet,
+                        "receiver_accepted_total": metrics_received_total,
+                        "processor_incoming": processor_metrics_in,
+                        "filter_dropped": filter_metrics_dropped,
+                        "exporter_sent": metrics_exported,
+                        "retention_rate": ((metrics_received_total - filter_metrics_dropped) / metrics_received_total * 100) if metrics_received_total > 0 else 0
+                    })
+                ))
+            
+            conn.commit()
+            
+            if filter_logs_dropped > 0 or filter_metrics_dropped > 0:
+                print(f"[{collector_name}] Filter Stats - Logs dropped: {filter_logs_dropped}, Metrics dropped: {filter_metrics_dropped}")
+            
+            return True
+        except Exception as e:
+            print(f"[{collector_name}] Error scraping metrics: {e}")
+            return False
+
+    conn = connect_db_with_retry()
+
+    print("✅ Started metrics scraper")
+    print(f"   - Scraping agent metrics from: {AGENT_METRICS_URLS}")
+    print(f"   - Scraping gateway metrics from: {GATEWAY_METRICS_URLS}")
+    print(f"   - Scrape interval: {SCRAPE_INTERVAL}s")
+
+    while True:
+        try:
+            scrape_and_store_metrics(conn, AGENT_METRICS_URLS, "agent")
+            scrape_and_store_metrics(conn, GATEWAY_METRICS_URLS, "gateway")
+        except Exception as e:
+            print(f"Error in scrape cycle: {e}")
+        time.sleep(SCRAPE_INTERVAL)
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-metrics-scraper
+  namespace: {{ .Values.namespaces.otelGateway }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-metrics-scraper
+  template:
+    metadata:
+      labels:
+        app: otel-metrics-scraper
+    spec:
+      containers:
+        - name: otel-metrics-scraper
+          image: python:3.12-slim
+          command:
+          - sh
+          - -c
+          - |
+            pip install --no-cache-dir requests psycopg2-binary && \
+            python -u /scripts/scrape_metrics.py
+          volumeMounts:
+            - name: script-volume
+              mountPath: /scripts
+          env:
+            - name: PGPASSWORD
+              value: "{{ .Values.otlpToPostgres.postgres.password }}"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi
+      volumes:
+        - name: script-volume
+          configMap:
+            name: otel-metrics-scraper-script
+            defaultMode: 0755
+{{- end }}
+

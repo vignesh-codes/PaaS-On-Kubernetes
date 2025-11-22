@@ -47,7 +47,7 @@ releases:
       - mode: daemonset
         image:
           repository: otel/opentelemetry-collector-contrib
-          tag: 0.103.0
+          tag: 0.139.0
         command:
           name: otelcol-contrib
           extraArgs:
@@ -91,7 +91,7 @@ releases:
         replicaCount: 1
         image:
           repository: otel/opentelemetry-collector-contrib
-          tag: 0.103.0
+          tag: 0.139.0
         command:
           name: otelcol-contrib
           extraArgs:

@@ -1,0 +1,24 @@
+# Arguments to metrics-server
+args:
+  - --kubelet-insecure-tls
+  - --kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname
+
+replicas: 1
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+hostNetwork:
+  enabled: false  # <- note this is now a map with 'enabled'
+
+priorityClassName: system-cluster-critical
+
+metrics:
+  enabled: true
+
+podAnnotations: {}

@@ -61,8 +61,24 @@ data:
           ts timestamptz
         );
         """)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS pipeline_insights (
+          id SERIAL PRIMARY KEY,
+          pipeline_type text NOT NULL,
+          stage text NOT NULL,
+          signal_type text NOT NULL,
+          count bigint NOT NULL,
+          dropped_count bigint DEFAULT 0,
+          stage_details jsonb,
+          ts timestamptz DEFAULT NOW()
+        );
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_pipeline_insights_type_ts 
+        ON pipeline_insights(pipeline_type, signal_type, ts);
+        """)
         conn.commit()
-        print("[BOOT] Ensured Postgres tables 'metrics' and 'logs' exist")
+        print("[BOOT] Ensured Postgres tables 'metrics', 'logs', and 'pipeline_insights' exist")
     except Exception as e:
         print(f"[BOOT] Failed ensuring tables: {e}")
 
@@ -127,28 +143,44 @@ data:
 
     class MetricsReceiver(metrics_service_pb2_grpc.MetricsServiceServicer):
         def Export(self, request, context):
-            print(f"[DEBUG] Received metrics: {len(request.resource_metrics)}")
+            resource_metrics_count = len(request.resource_metrics)
+            total_datapoints = 0
+            metric_names = set()
+            namespaces = set()
+            pods = set()
+            
             batch = []
             for resource_metric in request.resource_metrics:
                 resource_attrs = kvlist_to_dict(resource_metric.resource.attributes)
                 k8s_ns = resource_attrs.get("k8s.namespace.name")
                 k8s_pod = resource_attrs.get("k8s.pod.name")
                 k8s_container = resource_attrs.get("k8s.container.name")
+                
+                if k8s_ns:
+                    namespaces.add(k8s_ns)
+                if k8s_pod:
+                    pods.add(k8s_pod)
+                
                 for scope_metric in resource_metric.scope_metrics:
                     for metric in scope_metric.metrics:
                         metric_name = metric.name
+                        metric_names.add(metric_name)
+                        
                         if metric.HasField("gauge"):
                             for dp in metric.gauge.data_points:
                                 value = dp.as_double if dp.HasField("as_double") else (dp.as_int if dp.HasField("as_int") else None)
                                 labels = {kv.key: anyvalue_to_python(kv.value) for kv in dp.attributes}
                                 ts = dp.time_unix_nano or int(time.time()*1e9)
                                 batch.append((metric_name, value, json.dumps(labels), json.dumps(resource_attrs), k8s_ns, k8s_pod, k8s_container, ts))
+                                total_datapoints += 1
                         elif metric.HasField("sum"):
                             for dp in metric.sum.data_points:
                                 value = dp.as_double if dp.HasField("as_double") else (dp.as_int if dp.HasField("as_int") else None)
                                 labels = {kv.key: anyvalue_to_python(kv.value) for kv in dp.attributes}
                                 ts = dp.time_unix_nano or int(time.time()*1e9)
                                 batch.append((metric_name, value, json.dumps(labels), json.dumps(resource_attrs), k8s_ns, k8s_pod, k8s_container, ts))
+                                total_datapoints += 1
+            
             if batch:
                 args_str = ','.join(
                     cursor.mogrify(
@@ -158,19 +190,56 @@ data:
                     for x in batch
                 )
                 cursor.execute(f"INSERT INTO metrics (metric_name, value, attributes, resource, namespace, pod, container, ts) VALUES {args_str}")
+                
+                # Record pipeline insights for metrics
+                cursor.execute("""
+                    INSERT INTO pipeline_insights (pipeline_type, stage, signal_type, count, stage_details)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (
+                    "metrics_pipeline",
+                    "exporter_received",
+                    "metrics",
+                    total_datapoints,
+                    json.dumps({
+                        "resource_metrics": resource_metrics_count,
+                        "unique_metric_names": len(metric_names),
+                        "unique_namespaces": list(namespaces),
+                        "unique_pods": list(pods),
+                        "metric_names_sample": list(metric_names)[:10]  # First 10 for reference
+                    })
+                ))
+                
                 conn.commit()
-                print(f"[DEBUG] Inserted {len(batch)} metrics into Postgres")
+                print(f"[METRICS PIPELINE] ✅ Exported {total_datapoints} metric datapoints from {resource_metrics_count} resource_metrics | "
+                      f"Namespaces: {list(namespaces)[:5]} | Metrics: {len(metric_names)} unique")
+            else:
+                print(f"[METRICS PIPELINE] ⚠️ Received {resource_metrics_count} resource_metrics but no datapoints to export")
+            
             return metrics_service_pb2.ExportMetricsServiceResponse()
 
     class LogsReceiver(logs_service_pb2_grpc.LogsServiceServicer):
         def Export(self, request, context):
-            print(f"[DEBUG] Received logs: {len(request.resource_logs)}")
+            resource_logs_count = len(request.resource_logs)
+            total_log_records = 0
+            severity_counts = {}
+            namespaces = set()
+            pods = set()
+            containers = set()
+            
             batch = []
             for resource_log in request.resource_logs:
                 resource_attrs = kvlist_to_dict(resource_log.resource.attributes)
                 k8s_ns = resource_attrs.get("k8s.namespace.name")
                 k8s_pod = resource_attrs.get("k8s.pod.name")
                 k8s_container = resource_attrs.get("k8s.container.name")
+                
+                if k8s_ns:
+                    namespaces.add(k8s_ns)
+                if k8s_pod:
+                    pods.add(k8s_pod)
+                if k8s_container:
+                    containers.add(k8s_container)
+                
                 for scope_log in resource_log.scope_logs:
                     for log_record in scope_log.log_records:
                         body = log_record.body.string_value if log_record.body.HasField("string_value") else str(log_record.body)
@@ -178,6 +247,9 @@ data:
                         severity = infer_severity(getattr(log_record, "severity_text", None), attrs, body)
                         ts = log_record.time_unix_nano or int(time.time()*1e9)
                         batch.append((body, severity, json.dumps(attrs), json.dumps(resource_attrs), k8s_ns, k8s_pod, k8s_container, ts))
+                        total_log_records += 1
+                        severity_counts[severity] = severity_counts.get(severity, 0) + 1
+            
             if batch:
                 args_str = ','.join(
                     cursor.mogrify(
@@ -187,8 +259,32 @@ data:
                     for x in batch
                 )
                 cursor.execute(f"INSERT INTO logs (body, severity, attributes, resource, namespace, pod, container, ts) VALUES {args_str}")
+                
+                # Record pipeline insights for logs
+                cursor.execute("""
+                    INSERT INTO pipeline_insights (pipeline_type, stage, signal_type, count, stage_details)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (
+                    "logs_pipeline",
+                    "exporter_received",
+                    "logs",
+                    total_log_records,
+                    json.dumps({
+                        "resource_logs": resource_logs_count,
+                        "severity_distribution": severity_counts,
+                        "unique_namespaces": list(namespaces),
+                        "unique_pods": list(pods)[:10],  # First 10 for reference
+                        "unique_containers": list(containers)[:10]
+                    })
+                ))
+                
                 conn.commit()
-                print(f"[DEBUG] Inserted {len(batch)} logs/events into Postgres")
+                severity_summary = ", ".join([f"{k}:{v}" for k, v in sorted(severity_counts.items())])
+                print(f"[LOGS PIPELINE] ✅ Exported {total_log_records} log records from {resource_logs_count} resource_logs | "
+                      f"Severities: {severity_summary} | Namespaces: {list(namespaces)[:5]}")
+            else:
+                print(f"[LOGS PIPELINE] ⚠️ Received {resource_logs_count} resource_logs but no log records to export")
+            
             return logs_service_pb2.ExportLogsServiceResponse()
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=20))

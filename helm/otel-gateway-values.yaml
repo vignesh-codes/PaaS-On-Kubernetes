@@ -2,11 +2,9 @@ mode: deployment
 replicaCount: 1
 image:
   repository: otel/opentelemetry-collector-contrib
-  tag: 0.103.0
+  tag: 0.139.0
 command:
   name: otelcol-contrib
-  extraArgs:
-    - --set=service.telemetry.metrics.address=:8889
 resources:
   limits:
     cpu: 200m
@@ -14,7 +12,26 @@ resources:
   requests:
     cpu: 50m
     memory: 128Mi
+service:
+  # Service configuration
+  annotations: {}
+  # Note: Service ports are auto-configured by the Helm chart based on collector config
+  # pprof is available on port 1777 (from pprof extension) - access via port-forward
 config:
+  extensions:
+    # opamp:
+    #   server:
+    #     ws:
+    #       endpoint: "wss://host.docker.internal:4320/v1/opamp"
+    #       tls:
+    #         insecure_skip_verify: true
+    #   # optional fields below
+    #   capabilities:
+    #     reports_effective_config: true
+    #     reports_health: true
+    #     reports_available_components: true
+    pprof:
+      endpoint: 0.0.0.0:1777
   receivers:
     otlp:
       protocols:
@@ -28,9 +45,31 @@ config:
       tls:
         insecure: true
   service:
+    extensions: [health_check, pprof]
     telemetry:
       logs:
-        level: debug
+        level: info
+      metrics:
+        level: detailed
+        readers:
+          - pull:
+              exporter:
+                prometheus:
+                  host: '0.0.0.0'
+                  port: 8888
     pipelines:
-      logs: { receivers: [otlp], processors: [batch], exporters: [otlp] }
-      metrics: { receivers: [otlp], processors: [batch], exporters: [otlp] }
+      # Logs pipeline - ONLY processes logs
+      logs:
+        receivers: [otlp]
+        processors: [batch]
+        exporters: [otlp]
+      # Metrics pipeline - ONLY processes metrics
+      metrics:
+        receivers: [otlp]
+        processors: [batch]
+        exporters: [otlp]
+
+# # to run this
+# helm upgrade otel-gateway open-telemetry/opentelemetry-collector \
+#   -f otel-gateway-values.yaml \
+#   -n otel-gateway

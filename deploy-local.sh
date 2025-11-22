@@ -83,3 +83,15 @@ echo "  kubectl port-forward svc/deployment-service 8080:80 -n core-services"
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+

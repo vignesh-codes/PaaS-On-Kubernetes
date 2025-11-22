@@ -1,0 +1,114 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-pipeline-dashboard
+  namespace: otel-gateway
+  labels:
+    grafana_dashboard: "1"
+data:
+  otel-pipeline-dashboard.json: |
+    {
+      "title": "OpenTelemetry Collector Pipeline Overview",
+      "tags": ["otel", "opentelemetry", "collector"],
+      "schemaVersion": 36,
+      "version": 1,
+      "refresh": "10s",
+      "panels": [
+        {
+          "type": "stat",
+          "title": "Logs Received",
+          "datasource": "prometheus",
+          "targets": [
+            {
+              "expr": "sum(rate(otelcol_receiver_accepted_log_records_total[1m]))",
+              "legendFormat": "Log records received"
+            }
+          ],
+          "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 }
+        },
+        {
+          "type": "stat",
+          "title": "Logs Exported",
+          "datasource": "prometheus",
+          "targets": [
+            {
+              "expr": "sum(rate(otelcol_exporter_sent_log_records_total[1m]))",
+              "legendFormat": "Log records exported"
+            }
+          ],
+          "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 }
+        },
+        {
+          "type": "stat",
+          "title": "Dropped Logs",
+          "datasource": "prometheus",
+          "targets": [
+            {
+              "expr": "sum(rate(otelcol_processor_dropped_log_records_total[1m]))",
+              "legendFormat": "Dropped logs"
+            }
+          ],
+          "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 }
+        },
+        {
+          "type": "graph",
+          "title": "Per-Receiver Throughput",
+          "datasource": "prometheus",
+          "targets": [
+            {
+              "expr": "sum by(receiver)(rate(otelcol_receiver_accepted_log_records_total[1m]))",
+              "legendFormat": "{{receiver}}"
+            }
+          ],
+          "gridPos": { "x": 0, "y": 5, "w": 12, "h": 6 }
+        },
+        {
+          "type": "graph",
+          "title": "Per-Exporter Throughput",
+          "datasource": "prometheus",
+          "targets": [
+            {
+              "expr": "sum by(exporter)(rate(otelcol_exporter_sent_log_records_total[1m]))",
+              "legendFormat": "{{exporter}}"
+            }
+          ],
+          "gridPos": { "x": 12, "y": 5, "w": 12, "h": 6 }
+        },
+        {
+          "type": "graph",
+          "title": "Batch Processor Queue Size",
+          "datasource": "prometheus",
+          "targets": [
+            {
+              "expr": "sum(otelcol_processor_batch_queue_size)",
+              "legendFormat": "queue size"
+            }
+          ],
+          "gridPos": { "x": 0, "y": 12, "w": 12, "h": 6 }
+        },
+        {
+          "type": "graph",
+          "title": "Collector Memory Usage (bytes)",
+          "datasource": "prometheus",
+          "targets": [
+            {
+              "expr": "process_resident_memory_bytes{job=\"otel-gateway\"}",
+              "legendFormat": "RSS"
+            }
+          ],
+          "gridPos": { "x": 0, "y": 19, "w": 12, "h": 6 }
+        },
+        {
+          "type": "graph",
+          "title": "Goroutines",
+          "datasource": "prometheus",
+          "targets": [
+            {
+              "expr": "go_goroutines{job=\"otel-gateway\"}",
+              "legendFormat": "goroutines"
+            }
+          ],
+          "gridPos": { "x": 12, "y": 19, "w": 12, "h": 6 }
+        }
+      ]
+    }

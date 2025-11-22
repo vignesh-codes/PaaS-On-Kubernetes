@@ -1,0 +1,14 @@
+extensions:
+  opamp:
+    server:
+      ws:
+        endpoint: "wss://host.docker.internal:4320/v1/opamp"
+        tls:
+          insecure_skip_verify: true
+
+supervisor:
+  remote_config:
+    enabled: true
+  apply_config:
+    exec:
+      command: ["/otelcol-contrib", "--config=/var/lib/opamp-collector/config.yaml"]
