@@ -43,6 +43,33 @@ This repository implements a Platform-as-a-Service (PaaS) on Kubernetes with mul
   - Minimal Python gRPC server implementing OTLP logs/metrics ingest
   - Writes enriched rows into Postgres tables `logs` and `metrics`, including resource attributes (namespace, pod, container) and timestamps
 
+
+## Walkthrough
+
+Login Page
+![login](./images/login-page.png)
+
+Dashboard
+![dashboard](images/dashboard.png)
+
+Repo Scout
+![repo-scout](images/repo-scout.png)
+
+Create Deployments
+![create-deployments](images/create-deployment.png)
+
+Deployments
+![deployments](images/deployments-page.png)
+
+Deployment Details
+![deployment-details](images/deployments-details.png)
+
+Update Replicas
+![update-replicas](images/update-replicas.png)
+
+
+
+
 ## AI insights (Claude Anthropic MCP server)
 
 - An MCP (Model Context Protocol) server powered by Claude Anthropic is configured to query Postgres directly and generate insights about the platform state.
